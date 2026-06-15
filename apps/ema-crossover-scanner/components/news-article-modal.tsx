@@ -138,15 +138,36 @@ export function NewsArticleModal({ article, onClose }: NewsArticleModalProps) {
 
         <div className="news-modal-header">
           <div className="news-modal-ticker">
-            <span className="mono font-semibold text-[var(--accent)]">
-              {article.displayTicker}
-            </span>
-            {article.dailyChange != null && (
-              <span
-                className={`mono text-sm font-semibold ${changeColorClass(article.dailyChange)}`}
+            {article.tradingViewUrl ? (
+              <a
+                href={article.tradingViewUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="symbol-link news-modal-ticker-link"
+                onClick={(event) => event.stopPropagation()}
               >
-                {formatSessionChange(article.dailyChange)}
-              </span>
+                <span className="mono font-semibold">{article.displayTicker}</span>
+                {article.dailyChange != null && (
+                  <span
+                    className={`mono text-sm font-semibold ${changeColorClass(article.dailyChange)}`}
+                  >
+                    {formatSessionChange(article.dailyChange)}
+                  </span>
+                )}
+              </a>
+            ) : (
+              <>
+                <span className="mono font-semibold text-[var(--accent)]">
+                  {article.displayTicker}
+                </span>
+                {article.dailyChange != null && (
+                  <span
+                    className={`mono text-sm font-semibold ${changeColorClass(article.dailyChange)}`}
+                  >
+                    {formatSessionChange(article.dailyChange)}
+                  </span>
+                )}
+              </>
             )}
           </div>
           <p id="news-modal-title" className="news-modal-headline">

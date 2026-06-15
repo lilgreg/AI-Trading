@@ -638,6 +638,14 @@ export default function HomePage() {
     return map;
   }, [data?.results, quoteDailyBySymbol]);
 
+  const tradingViewUrlBySymbol = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const row of data?.results ?? []) {
+      if (row.tradingViewUrl) map.set(row.symbol, row.tradingViewUrl);
+    }
+    return map;
+  }, [data?.results]);
+
   const stats = useMemo(() => {
     const rows = filteredResults;
     return {
@@ -782,6 +790,9 @@ export default function HomePage() {
                       ...item,
                       dailyChange:
                         dailyChangeBySymbol.get(item.symbol) ?? item.dailyChange,
+                      tradingViewUrl:
+                        item.tradingViewUrl ??
+                        tradingViewUrlBySymbol.get(item.symbol),
                     })
                   }
                 >

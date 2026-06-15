@@ -15,6 +15,7 @@ const SYMBOL_CONCURRENCY = 6;
 export interface NewsHeadline {
   symbol: string;
   displayTicker: string;
+  tradingViewUrl?: string;
   /** Combined daily % change (pre + regular + post vs previous close). */
   dailyChange: number | null;
   headline: string;
@@ -89,6 +90,7 @@ async function fetchSymbolNews(
         return {
           symbol,
           displayTicker,
+          tradingViewUrl: row.tradingViewUrl,
           dailyChange,
           headline: item.title,
           summary,
