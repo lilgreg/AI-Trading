@@ -11,8 +11,16 @@ import { retryWithBackoff, sleep, yahooLimiter } from "./request-limit";
 
 const yahooFinance = new YahooFinance({ suppressNotices: ["yahooSurvey"] });
 
-const YAHOO_TIMEOUT_MS = Number(process.env.YAHOO_TIMEOUT_MS ?? 20_000);
-const YAHOO_RETRY_TIMEOUT_MS = Number(process.env.YAHOO_RETRY_TIMEOUT_MS ?? 30_000);
+export const YAHOO_TIMEOUT_MS = Number(process.env.YAHOO_TIMEOUT_MS ?? 20_000);
+export const YAHOO_RETRY_TIMEOUT_MS = Number(
+  process.env.YAHOO_RETRY_TIMEOUT_MS ?? 30_000,
+);
+
+const YAHOO_USER_AGENTS = [
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (compatible; EMAScanner/1.0; +https://github.com/)",
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
+];
 
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   return Promise.race([
@@ -21,6 +29,15 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
       setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
     }),
   ]);
+}
+
+function daysToYahooRange(days: number): string {
+  if (days <= 5) return "5d";
+  if (days <= 30) return "1mo";
+  if (days <= 90) return "3mo";
+  if (days <= 180) return "6mo";
+  if (days <= 365) return "1y";
+  return "2y";
 }
 
 function isRetryableYahooError(err: unknown): boolean {
@@ -68,7 +85,35 @@ function parseYahooV8Chart(body: {
   return bars.sort((a, b) => a.date.getTime() - b.date.getTime());
 }
 
-/** Alternate Yahoo chart v8 endpoint (sometimes succeeds when yahoo-finance2 is throttled). */
+async function fetchYahooChartJson(
+  url: URL,
+  symbol: string,
+  timeoutMs: number,
+  label: string,
+  userAgent: string,
+): Promise<OhlcBar[]> {
+  const body = await withTimeout(
+    fetch(url, {
+      headers: { "User-Agent": userAgent },
+      cache: "no-store",
+    }).then(async (res) => {
+      if (!res.ok) throw new Error(`${label} HTTP ${res.status} for ${symbol}`);
+      return res.json() as Promise<{
+        chart?: { result?: Array<{ timestamp?: number[]; indicators?: { quote?: YahooChartQuote[] } }> };
+      }>;
+    }),
+    timeoutMs,
+    label,
+  );
+
+  const bars = parseYahooV8Chart(body);
+  if (bars.length === 0) {
+    throw new Error(`${label} returned no bars for ${symbol}`);
+  }
+  return bars;
+}
+
+/** Yahoo chart v8 with period1/period2 (query1 + query2). */
 export async function fetchYahooChartV8Direct(
   symbol: string,
   days: number,
@@ -76,11 +121,11 @@ export async function fetchYahooChartV8Direct(
 ): Promise<OhlcBar[]> {
   const end = Math.floor(Date.now() / 1000);
   const start = end - (days + 14) * 24 * 60 * 60;
-
   const hosts = ["query1.finance.yahoo.com", "query2.finance.yahoo.com"];
   let lastError: unknown;
 
-  for (const host of hosts) {
+  for (let i = 0; i < hosts.length; i += 1) {
+    const host = hosts[i];
     const url = new URL(`https://${host}/v8/finance/chart/${encodeURIComponent(symbol)}`);
     url.searchParams.set("interval", "1h");
     url.searchParams.set("period1", String(start));
@@ -88,28 +133,13 @@ export async function fetchYahooChartV8Direct(
     url.searchParams.set("includePrePost", "false");
 
     try {
-      const body = await withTimeout(
-        fetch(url, {
-          headers: {
-            "User-Agent":
-              "Mozilla/5.0 (compatible; EMAScanner/1.0; +https://github.com/)",
-          },
-          cache: "no-store",
-        }).then(async (res) => {
-          if (!res.ok) throw new Error(`Yahoo v8 chart HTTP ${res.status} for ${symbol}`);
-          return res.json() as Promise<{
-            chart?: { result?: Array<{ timestamp?: number[]; indicators?: { quote?: YahooChartQuote[] } }> };
-          }>;
-        }),
+      return await fetchYahooChartJson(
+        url,
+        symbol,
         timeoutMs,
         `Yahoo v8 chart for ${symbol}`,
+        YAHOO_USER_AGENTS[i % YAHOO_USER_AGENTS.length],
       );
-
-      const bars = parseYahooV8Chart(body);
-      if (bars.length === 0) {
-        throw new Error(`Yahoo v8 chart returned no bars for ${symbol}`);
-      }
-      return bars;
     } catch (err) {
       lastError = err;
     }
@@ -120,7 +150,130 @@ export async function fetchYahooChartV8Direct(
     : new Error(`Yahoo v8 chart failed for ${symbol}`);
 }
 
-async function fetchYahooLibraryChart(
+/** Yahoo chart v8 with range param — alternate endpoint rotation. */
+export async function fetchYahooChartV8Range(
+  symbol: string,
+  days: number,
+  timeoutMs = YAHOO_TIMEOUT_MS,
+): Promise<OhlcBar[]> {
+  const range = daysToYahooRange(days + 14);
+  const hosts = ["query2.finance.yahoo.com", "query1.finance.yahoo.com"];
+  let lastError: unknown;
+
+  for (let i = 0; i < hosts.length; i += 1) {
+    const host = hosts[i];
+    const url = new URL(`https://${host}/v8/finance/chart/${encodeURIComponent(symbol)}`);
+    url.searchParams.set("interval", "1h");
+    url.searchParams.set("range", range);
+    url.searchParams.set("includePrePost", "false");
+
+    try {
+      return await fetchYahooChartJson(
+        url,
+        symbol,
+        timeoutMs,
+        `Yahoo v8 range chart for ${symbol}`,
+        YAHOO_USER_AGENTS[(i + 1) % YAHOO_USER_AGENTS.length],
+      );
+    } catch (err) {
+      lastError = err;
+    }
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error(`Yahoo v8 range chart failed for ${symbol}`);
+}
+
+function parseYahooSpark(body: {
+  spark?: {
+    result?: Array<{
+      response?: Array<{
+        timestamp?: number[];
+        indicators?: { quote?: YahooChartQuote[] };
+      }>;
+    }>;
+  };
+}): OhlcBar[] {
+  const response = body.spark?.result?.[0]?.response?.[0];
+  const timestamps = response?.timestamp ?? [];
+  const quote = response?.indicators?.quote?.[0];
+  if (!quote || timestamps.length === 0) return [];
+
+  const bars: OhlcBar[] = [];
+  for (let i = 0; i < timestamps.length; i += 1) {
+    const close = quote.close?.[i];
+    if (close == null) continue;
+    bars.push({
+      date: new Date(timestamps[i] * 1000),
+      open: quote.open?.[i] ?? undefined,
+      high: quote.high?.[i] ?? undefined,
+      low: quote.low?.[i] ?? undefined,
+      close,
+    });
+  }
+  return bars.sort((a, b) => a.date.getTime() - b.date.getTime());
+}
+
+/** Lightweight Yahoo Spark API — keyless fallback when v8/library are throttled. */
+export async function fetchYahooSparkHourlyBars(
+  symbol: string,
+  days: number,
+  timeoutMs = YAHOO_TIMEOUT_MS,
+): Promise<OhlcBar[]> {
+  const range = daysToYahooRange(days + 14);
+  const hosts = ["query1.finance.yahoo.com", "query2.finance.yahoo.com"];
+  let lastError: unknown;
+
+  for (let i = 0; i < hosts.length; i += 1) {
+    const host = hosts[i];
+    const url = new URL(`https://${host}/v7/finance/spark`);
+    url.searchParams.set("symbols", symbol.toUpperCase());
+    url.searchParams.set("range", range);
+    url.searchParams.set("interval", "1h");
+    url.searchParams.set("includePrePost", "false");
+
+    try {
+      const body = await withTimeout(
+        fetch(url, {
+          headers: { "User-Agent": YAHOO_USER_AGENTS[i % YAHOO_USER_AGENTS.length] },
+          cache: "no-store",
+        }).then(async (res) => {
+          if (!res.ok) {
+            throw new Error(`Yahoo spark HTTP ${res.status} for ${symbol}`);
+          }
+          return res.json() as Promise<{
+            spark?: {
+              result?: Array<{
+                response?: Array<{
+                  timestamp?: number[];
+                  indicators?: { quote?: YahooChartQuote[] };
+                }>;
+              }>;
+            };
+          }>;
+        }),
+        timeoutMs,
+        `Yahoo spark for ${symbol}`,
+      );
+
+      const bars = parseYahooSpark(body);
+      if (bars.length === 0) {
+        throw new Error(`Yahoo spark returned no bars for ${symbol}`);
+      }
+      return bars;
+    } catch (err) {
+      lastError = err;
+    }
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error(`Yahoo spark failed for ${symbol}`);
+}
+
+/** yahoo-finance2 library chart — slower, often throttled after ~120 symbols. */
+export async function fetchYahooFinance2HourlyBars(
   symbol: string,
   days: number,
   timeoutMs: number,
@@ -158,7 +311,7 @@ async function fetchYahooHourlyBarsOnce(symbol: string, days: number): Promise<O
     if (!isRetryableYahooError(v8Err)) throw v8Err;
     await sleep(300);
     try {
-      return await fetchYahooLibraryChart(symbol, days, YAHOO_TIMEOUT_MS);
+      return await fetchYahooFinance2HourlyBars(symbol, days, YAHOO_TIMEOUT_MS);
     } catch (libErr) {
       if (!isRetryableYahooError(libErr)) throw libErr;
       await sleep(400);
@@ -182,9 +335,11 @@ export async function fetchYahooHourlyBars(
   );
 }
 
-/** @deprecated Use fetchHourlyBars from ./market-data for cache + backup providers. */
+/** @deprecated Use fetchHourlyBars from ./chart-data for cache + backup providers. */
 export async function fetchHourlyBars(symbol: string, days: number): Promise<OhlcBar[]> {
-  return fetchYahooHourlyBars(symbol, days);
+  const { fetchHourlyBars: fetchWithFallback } = await import("./chart-data");
+  const result = await fetchWithFallback(symbol, days);
+  return result.bars;
 }
 
 export async function fetchHistoricalBars(
@@ -192,7 +347,8 @@ export async function fetchHistoricalBars(
   days: number,
   interval: ScanInterval,
 ): Promise<OhlcBar[]> {
-  const hourly = await fetchHourlyBars(symbol, days);
+  const { fetchHourlyBars: fetchWithFallback } = await import("./chart-data");
+  const { bars: hourly } = await fetchWithFallback(symbol, days);
   if (interval === "1h") return hourly;
   return aggregateHourlyTo4h(hourly);
 }

@@ -4,7 +4,7 @@ import {
   latestEmaValues,
   type CrossoverInfo,
 } from "./ema";
-import { fetchHourlyBars } from "./market-data";
+import { fetchHourlyBars } from "./chart-data";
 import { evaluateAllPatterns, NONE_PATTERNS } from "./patterns";
 import { sleep } from "./request-limit";
 import { resolveLogoUrl } from "./symbol-logo";
@@ -93,6 +93,7 @@ export async function scanSymbol(
     cross4h: { ...EMPTY_CROSSOVER },
     tradingViewUrl: tradingViewChartUrl(tvSymbol, "4h"),
     logoUrl: null,
+    dataSource: null,
   };
 
   try {
@@ -107,8 +108,11 @@ export async function scanSymbol(
     base.tradingViewUrl = tradingViewChartUrl(resolvedTvEarly, "4h");
 
     let hourly: Awaited<ReturnType<typeof fetchHourlyBars>>["bars"];
+    let dataSource: string | null = null;
     try {
-      ({ bars: hourly } = await fetchHourlyBars(parsed.yahoo, historyDays));
+      const chartResult = await fetchHourlyBars(parsed.yahoo, historyDays);
+      hourly = chartResult.bars;
+      dataSource = chartResult.source;
     } catch (chartErr) {
       const message =
         chartErr instanceof Error ? chartErr.message : "Failed to fetch chart data";
@@ -151,6 +155,7 @@ export async function scanSymbol(
       ...base,
       ...meta,
       exchange: meta.exchange ?? parsed.exchange,
+      dataSource,
       ema20: emaFast,
       ema50: emaSlow,
       ema20Above50: fastAboveSlow,

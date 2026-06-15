@@ -87,11 +87,26 @@ Open [http://localhost:3000](http://localhost:3000) — loads instantly from `.c
 | `CRON_SECRET` | **Vercel prod** | — | Bearer token for cron route |
 | `SCAN_STALE_MINUTES` | | `15` | Cache TTL before client/cron auto-refresh |
 | `YAHOO_TIMEOUT_MS` | | `20000` | Yahoo chart/quote timeout (ms) |
-| `YAHOO_RETRY_TIMEOUT_MS` | | `30000` | Timeout for Yahoo v8 fallback on retry |
-| `FINNHUB_API_KEY` | optional | — | Hourly bar fallback via Finnhub candles API |
+| `YAHOO_RETRY_TIMEOUT_MS` | | `30000` | Timeout for Yahoo v8 retry pass |
+| `FINNHUB_API_KEY` | **recommended (Vercel)** | — | Free hourly bar fallback when Yahoo throttles (~symbol 120+) |
 | `POLYGON_API_KEY` | optional | — | Hourly bar fallback via Polygon aggregates |
 | `TWELVE_DATA_API_KEY` | optional | — | Hourly bar fallback via Twelve Data |
 | `ALPHA_VANTAGE_API_KEY` | optional | — | Hourly bar fallback via AV intraday (strict free-tier limits) |
+
+### Chart data provider chain
+
+Hourly bars are fetched via `lib/chart-data.ts` — each symbol tries providers **in order until one succeeds**:
+
+1. Yahoo v8 direct (`query1` / `query2`)
+2. Yahoo Spark API (lightweight keyless Yahoo endpoint)
+3. Yahoo v8 range param (alternate endpoint rotation)
+4. yahoo-finance2 library
+5. Yahoo v8 retry (longer timeout)
+6. Finnhub candles (requires `FINNHUB_API_KEY`)
+7. Polygon / Twelve Data / Alpha Vantage (optional keys)
+8. Stooq CSV (keyless; often blocked by bot protection)
+
+**For reliable production scans**, set a free [Finnhub API key](https://finnhub.io/register) as `FINNHUB_API_KEY` on Vercel (`ai-trading-scanner` project). Without it, scans may fail after Yahoo rate-limits around symbol #120.
 
 ## Pattern data vs TradingView
 
@@ -110,7 +125,7 @@ Open [http://localhost:3000](http://localhost:3000) — loads instantly from `.c
 
 1. Push to GitHub and import in [Vercel](https://vercel.com/new)
 2. **Create a Blob store** (Storage → Blob) and connect `BLOB_READ_WRITE_TOKEN`
-3. Set env vars: `TRADINGVIEW_WATCHLIST_URL`, `CRON_SECRET`, `BLOB_READ_WRITE_TOKEN`
+3. Set env vars: `TRADINGVIEW_WATCHLIST_URL`, `CRON_SECRET`, `BLOB_READ_WRITE_TOKEN`, **`FINNHUB_API_KEY`** (free at [finnhub.io/register](https://finnhub.io/register))
 4. Deploy — `vercel.json` registers cron: `0 0 * * *` → `/api/cron/scan` (daily on Hobby)
 5. Optionally trigger first scan: `curl -H "Authorization: Bearer $CRON_SECRET" https://YOUR_APP.vercel.app/api/cron/scan`
 
@@ -119,6 +134,7 @@ Open [http://localhost:3000](http://localhost:3000) — loads instantly from `.c
 - [ ] Blob store created + token linked to project
 - [ ] `CRON_SECRET` set (random string; Vercel Cron sends it automatically when configured in dashboard)
 - [ ] `TRADINGVIEW_WATCHLIST_URL` set (full watchlist — not blue chips only)
+- [ ] **`FINNHUB_API_KEY` set** (backup when Yahoo throttles after ~120 symbols)
 - [ ] Cron enabled (Hobby: daily limit)
 - [ ] Function max duration 300s (configured in `vercel.json`)
 

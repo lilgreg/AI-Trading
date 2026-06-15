@@ -83,6 +83,8 @@ export interface StockScanResult {
   tradingViewUrl: string;
   /** Resolved logo CDN URL from scan (client may still fall back on error). */
   logoUrl?: string | null;
+  /** Hourly bar provider used for this scan (yahoo-v8, yahoo-spark, finnhub, etc.). */
+  dataSource?: string | null;
   error?: string;
 }
 
