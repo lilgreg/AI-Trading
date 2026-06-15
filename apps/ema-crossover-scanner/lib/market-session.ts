@@ -32,7 +32,7 @@ function getNyClock(at: Date): NyClock {
     Fri: 5,
     Sat: 6,
   };
-  const hour = Number(get("hour"));
+  const hour = Number(get("hour")) % 24;
   const minute = Number(get("minute"));
 
   return {
@@ -83,10 +83,11 @@ export function filterSessionChangesForMarket(
     case "afterHours":
       return changes;
     case "closed":
+      // Overnight / weekend: keep last regular + after-hours for daily % display.
       return {
         preMarketChange: null,
-        regularMarketChange: null,
-        postMarketChange: null,
+        regularMarketChange: changes.regularMarketChange,
+        postMarketChange: changes.postMarketChange,
       };
   }
 }

@@ -20,9 +20,11 @@ export function applyQuoteUpdates(
     return {
       ...row,
       price: quote.price ?? row.price,
-      preMarketChange: quote.preMarketChange ?? row.preMarketChange,
-      regularMarketChange: quote.regularMarketChange ?? row.regularMarketChange,
-      postMarketChange: quote.postMarketChange ?? row.postMarketChange,
+      // Always take session fields from live quotes — null means "not active today"
+      // and must not fall back to stale scan-cache regular/after-hours values.
+      preMarketChange: quote.preMarketChange,
+      regularMarketChange: quote.regularMarketChange,
+      postMarketChange: quote.postMarketChange,
     };
   });
 }

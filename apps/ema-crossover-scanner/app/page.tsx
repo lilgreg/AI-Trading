@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { formatMsAgo } from "@/lib/ema";
-import { computeDailyChange } from "@/lib/daily-change";
+import { dailyChangeForScanRow } from "@/lib/daily-change";
 import {
   filterSessionChangesForMarket,
 } from "@/lib/market-session";
@@ -76,9 +76,11 @@ function SessionChangesCell({ row }: { row: StockScanResult }) {
     return <span className="text-[var(--muted)]">—</span>;
   }
 
+  const visible = rows.filter((r) => r.value != null);
+
   return (
     <div className="space-y-0.5 text-sm leading-snug">
-      {rows.map(({ label, value }) => (
+      {visible.map(({ label, value }) => (
         <div key={label} className="flex items-baseline gap-2">
           <span className="w-8 shrink-0 text-[var(--muted)]">{label}</span>
           <span className={`mono text-base ${changeColorClass(value)}`}>
@@ -646,23 +648,9 @@ export default function HomePage() {
   const dailyChangeBySymbol = useMemo(() => {
     const map = new Map<string, number | null>();
     for (const row of data?.results ?? []) {
-      const fromQuote = quoteDailyBySymbol.get(row.symbol);
-      if (fromQuote != null) {
-        map.set(row.symbol, fromQuote);
-        continue;
-      }
-      const filtered = filterSessionChangesForMarket({
-        preMarketChange: row.preMarketChange,
-        regularMarketChange: row.regularMarketChange,
-        postMarketChange: row.postMarketChange,
-      });
       map.set(
         row.symbol,
-        computeDailyChange(
-          filtered.preMarketChange,
-          filtered.regularMarketChange,
-          filtered.postMarketChange,
-        ),
+        dailyChangeForScanRow(row, quoteDailyBySymbol.get(row.symbol)),
       );
     }
     return map;
