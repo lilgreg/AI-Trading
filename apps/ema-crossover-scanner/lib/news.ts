@@ -18,6 +18,8 @@ export interface NewsHeadline {
   /** Combined daily % change (pre + regular + post vs previous close). */
   dailyChange: number | null;
   headline: string;
+  /** Snippet from Yahoo when available; modal may fetch og:description as fallback. */
+  summary?: string | null;
   publisher: string;
   url: string;
   publishedAt: string;
@@ -80,11 +82,16 @@ async function fetchSymbolNews(
           ? new Date().toISOString()
           : published.toISOString();
 
+        const rawSummary = (item as { summary?: unknown }).summary;
+        const summary =
+          typeof rawSummary === "string" ? rawSummary.trim() || null : null;
+
         return {
           symbol,
           displayTicker,
           dailyChange,
           headline: item.title,
+          summary,
           publisher: item.publisher ?? "Yahoo Finance",
           url: item.link,
           publishedAt,

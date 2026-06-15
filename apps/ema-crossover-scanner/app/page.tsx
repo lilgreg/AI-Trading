@@ -14,6 +14,8 @@ import {
 import { patternSortKey } from "@/lib/pattern-sort";
 import { applyQuoteUpdates, dailyChangeByQuoteUpdates } from "@/lib/quote-updates";
 import { StockLogo } from "@/components/stock-logo";
+import { NewsArticleModal } from "@/components/news-article-modal";
+import type { NewsHeadline } from "@/lib/news";
 import type {
   CachedScanResponse,
   CrossoverDisplay,
@@ -245,18 +247,6 @@ function newsHeadlineId(item: NewsHeadline): string {
   return item.url || `${item.symbol}-${item.headline}`;
 }
 
-interface NewsHeadline {
-  symbol: string;
-  displayTicker: string;
-  dailyChange: number | null;
-  headline: string;
-  publisher: string;
-  url: string;
-  publishedAt: string;
-  msAgo: number;
-  timeAgo: string;
-}
-
 function ScanTableColgroup() {
   return (
     <colgroup>
@@ -348,6 +338,9 @@ export default function HomePage() {
   const [newsSymbolCount, setNewsSymbolCount] = useState(0);
   const [newsLoading, setNewsLoading] = useState(false);
   const [glowingNewsIds, setGlowingNewsIds] = useState<Set<string>>(() => new Set());
+  const [selectedNewsArticle, setSelectedNewsArticle] = useState<NewsHeadline | null>(
+    null,
+  );
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const statusPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const quotesPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -777,12 +770,17 @@ export default function HomePage() {
                 dailyChangeBySymbol.get(item.symbol) ?? item.dailyChange;
 
               return (
-                <a
+                <button
                   key={headlineId}
-                  href={item.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
+                  type="button"
                   className={`news-chip${isNew ? " news-chip-new" : ""}`}
+                  onClick={() =>
+                    setSelectedNewsArticle({
+                      ...item,
+                      dailyChange:
+                        dailyChangeBySymbol.get(item.symbol) ?? item.dailyChange,
+                    })
+                  }
                 >
                   <div className="news-chip-ticker">
                     <span>{item.displayTicker}</span>
@@ -798,7 +796,7 @@ export default function HomePage() {
                   <div className="news-chip-meta">
                     {item.timeAgo} · {item.publisher}
                   </div>
-                </a>
+                </button>
               );
             })}
           </div>
@@ -810,30 +808,22 @@ export default function HomePage() {
         )}
       </section>
 
-      <section className="card">
-        <div className="scan-table-xscroll">
-          <div className="scan-table-sticky-head">
-            <table className="scan-table">
-              <ScanTableColgroup />
-              <thead>
-                <ScanTableHeaderRow
-                  sortKey={sortKey}
-                  sortDir={sortDir}
-                  onSort={handleSort}
-                />
-              </thead>
-            </table>
-          </div>
+      <section className="card scan-table-card">
+        <div className="scan-table-sticky-head">
           <table className="scan-table">
             <ScanTableColgroup />
-            <thead className="sr-only">
+            <thead className="scan-table-head">
               <ScanTableHeaderRow
                 sortKey={sortKey}
                 sortDir={sortDir}
                 onSort={handleSort}
               />
             </thead>
-            <tbody>
+          </table>
+        </div>
+        <table className="scan-table scan-table-body">
+          <ScanTableColgroup />
+          <tbody>
               {loading && !data ? (
                 <tr>
                   <td colSpan={12} className="py-12 text-center text-[var(--muted)]">
@@ -917,10 +907,14 @@ export default function HomePage() {
                   );
                 })
               )}
-            </tbody>
-          </table>
-        </div>
+          </tbody>
+        </table>
       </section>
+
+      <NewsArticleModal
+        article={selectedNewsArticle}
+        onClose={() => setSelectedNewsArticle(null)}
+      />
 
       <footer className="mt-8 text-xs text-[var(--muted)]">
         Price data via Yahoo Finance (1h bars, aggregated to 4h). Pattern labels are
