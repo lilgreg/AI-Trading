@@ -2,9 +2,10 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { formatMsAgo } from "@/lib/ema";
+import { normalizeCrossover, normalizePatterns } from "@/lib/normalize-scan-result";
 import { patternSortKey } from "@/lib/patterns";
 import type { CachedScanResponse, CrossoverDisplay, PatternDetection } from "@/lib/types";
-import type { StockScanResult, SymbolPatterns } from "@/lib/types";
+import type { StockScanResult } from "@/lib/types";
 
 type SortKey = "session" | "patterns" | "cross1h" | "cross4h";
 type SortDir = "asc" | "desc";
@@ -84,26 +85,27 @@ function formatPatternLabel(prefix: string, pattern: PatternDetection): string |
 }
 
 function PatternsCell({ patterns }: { patterns: StockScanResult["patterns"] }) {
+  const safe = normalizePatterns(patterns);
   const lines = [
     {
       key: "db",
-      text: formatPatternLabel("DB", patterns.doubleBottom),
-      status: patterns.doubleBottom.status,
+      text: formatPatternLabel("DB", safe.doubleBottom),
+      status: safe.doubleBottom.status,
     },
     {
       key: "dt",
-      text: formatPatternLabel("DT", patterns.doubleTop),
-      status: patterns.doubleTop.status,
+      text: formatPatternLabel("DT", safe.doubleTop),
+      status: safe.doubleTop.status,
     },
     {
       key: "hs",
-      text: formatPatternLabel("HS", patterns.headShoulders),
-      status: patterns.headShoulders.status,
+      text: formatPatternLabel("HS", safe.headShoulders),
+      status: safe.headShoulders.status,
     },
     {
       key: "ihs",
-      text: formatPatternLabel("IHS", patterns.inverseHeadShoulders),
-      status: patterns.inverseHeadShoulders.status,
+      text: formatPatternLabel("IHS", safe.inverseHeadShoulders),
+      status: safe.inverseHeadShoulders.status,
     },
   ].filter((line) => line.text != null);
 
@@ -130,46 +132,73 @@ function CrossoverCell({
   cross,
   error,
 }: {
-  cross: CrossoverDisplay;
+  cross: CrossoverDisplay | undefined;
   error?: string;
 }) {
   if (error) {
     return <span className="text-[var(--red)] text-xs">{error}</span>;
   }
 
-  const iso = cross.crossoverAt ?? null;
-  if (!iso) {
+  const safe = normalizeCrossover(cross);
+  const iso = safe.crossoverAt;
+  if (iso) {
+    const when = new Date(iso);
+    const dateStr = when.toLocaleDateString(undefined, { dateStyle: "short" });
+    const timeStr = when.toLocaleTimeString(undefined, { timeStyle: "short" });
+
     return (
-      <span className="badge-muted inline-block rounded-full px-2 py-0.5 text-xs">
-        No cross in window
-      </span>
+      <div>
+        <div className="font-medium">{dateStr}</div>
+        <div className="text-sm text-[var(--text)]">{timeStr}</div>
+        <div className="text-xs text-[var(--muted)]">
+          {safe.crossoverMsAgo != null
+            ? formatMsAgo(safe.crossoverMsAgo)
+            : "—"}
+        </div>
+      </div>
     );
   }
 
-  const when = new Date(iso);
-  const dateStr = when.toLocaleDateString(undefined, { dateStyle: "short" });
-  const timeStr = when.toLocaleTimeString(undefined, { timeStyle: "short" });
+  if (safe.crossoverDate) {
+    return (
+      <div>
+        <div className="font-medium">{safe.crossoverDate}</div>
+        {safe.crossoverTime && (
+          <div className="text-sm text-[var(--text)]">{safe.crossoverTime}</div>
+        )}
+        <div className="text-xs text-[var(--muted)]">
+          {safe.crossoverMsAgo != null
+            ? formatMsAgo(safe.crossoverMsAgo)
+            : "—"}
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div>
-      <div className="font-medium">{dateStr}</div>
-      <div className="text-sm text-[var(--text)]">{timeStr}</div>
-      <div className="text-xs text-[var(--muted)]">
-        {cross.crossoverMsAgo != null
-          ? formatMsAgo(cross.crossoverMsAgo)
-          : "—"}
-      </div>
-    </div>
+    <span className="badge-muted inline-block rounded-full px-2 py-0.5 text-xs">
+      No cross in window
+    </span>
   );
 }
 
-function rowPatternSortKey(patterns: SymbolPatterns): number {
+function rowPatternSortKey(patterns: StockScanResult["patterns"]): number {
+  const safe = normalizePatterns(patterns);
   return Math.min(
-    patternSortKey(patterns.doubleBottom),
-    patternSortKey(patterns.doubleTop),
-    patternSortKey(patterns.headShoulders),
-    patternSortKey(patterns.inverseHeadShoulders),
+    patternSortKey(safe.doubleBottom),
+    patternSortKey(safe.doubleTop),
+    patternSortKey(safe.headShoulders),
+    patternSortKey(safe.inverseHeadShoulders),
   );
+}
+
+function hasCrossover(cross: CrossoverDisplay | undefined): boolean {
+  const safe = normalizeCrossover(cross);
+  return Boolean(safe.crossoverAt ?? safe.crossoverDate);
+}
+
+function crossoverMsAgo(cross: CrossoverDisplay | undefined): number | null {
+  return normalizeCrossover(cross).crossoverMsAgo;
 }
 
 function ariaSortValue(key: SortKey, activeKey: SortKey, dir: SortDir) {
@@ -285,15 +314,15 @@ export default function HomePage() {
       } else if (sortKey === "patterns") {
         cmp = rowPatternSortKey(a.patterns) - rowPatternSortKey(b.patterns);
       } else if (sortKey === "cross1h") {
-        const aVal = a.cross1h.crossoverMsAgo;
-        const bVal = b.cross1h.crossoverMsAgo;
+        const aVal = crossoverMsAgo(a.cross1h);
+        const bVal = crossoverMsAgo(b.cross1h);
         if (aVal == null && bVal == null) cmp = 0;
         else if (aVal == null) cmp = 1;
         else if (bVal == null) cmp = -1;
         else cmp = aVal - bVal;
       } else {
-        const aVal = a.cross4h.crossoverMsAgo;
-        const bVal = b.cross4h.crossoverMsAgo;
+        const aVal = crossoverMsAgo(a.cross4h);
+        const bVal = crossoverMsAgo(b.cross4h);
         if (aVal == null && bVal == null) cmp = 0;
         else if (aVal == null) cmp = 1;
         else if (bVal == null) cmp = -1;
@@ -310,8 +339,8 @@ export default function HomePage() {
     const rows = filteredResults;
     return {
       above: rows.filter((r) => r.ema20Above50 && !r.error).length,
-      withCross1h: rows.filter((r) => r.cross1h.crossoverAt && !r.error).length,
-      withCross4h: rows.filter((r) => r.cross4h.crossoverAt && !r.error).length,
+      withCross1h: rows.filter((r) => hasCrossover(r.cross1h) && !r.error).length,
+      withCross4h: rows.filter((r) => hasCrossover(r.cross4h) && !r.error).length,
       errors: rows.filter((r) => r.error).length,
       total: data?.symbolCount ?? rows.length,
     };
