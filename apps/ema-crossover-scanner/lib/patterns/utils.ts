@@ -11,8 +11,13 @@ import type {
 
 /**
  * Algorithmic pattern detection — NOT TradingView auto-chart-patterns.
- * TradingView has no public pattern API; thresholds here prioritize fewer
- * false positives over matching TV's proprietary visual recognition.
+ *
+ * Data source: Yahoo Finance 1h OHLC bars (aggregated to 4h in lib/yahoo.ts).
+ * TradingView has no official public OHLC or pattern API; unofficial scanner/
+ * websocket endpoints are undocumented, auth-gated, ToS-sensitive, and unreliable
+ * on Vercel serverless — we keep Yahoo for price/EMA/pattern bars. Thresholds
+ * here prioritize fewer false positives over matching TV's proprietary labels.
+ * Always verify Active patterns on the linked TradingView chart.
  */
 export const RECENCY_DAYS = 40;
 export const RECENCY_MS = RECENCY_DAYS * 24 * 60 * 60 * 1000;
@@ -579,15 +584,4 @@ export function mergeMultiTimeframe(
   return detection;
 }
 
-/** Client-side sort key: lower = more interesting (Active, then recent). */
-export function patternSortKey(detection: PatternDetection): number {
-  const tier: Record<PatternStatus, number> = {
-    Active: 0,
-    Failed: 100,
-    Target: 200,
-    None: 1000,
-  };
-  const base = tier[detection.status];
-  const recency = detection.confirmMsAgo ?? Number.MAX_SAFE_INTEGER;
-  return base + recency / 1e15;
-}
+export { patternSortKey } from "../pattern-sort";

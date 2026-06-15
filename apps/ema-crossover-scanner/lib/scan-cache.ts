@@ -1,6 +1,6 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { normalizeScanResult } from "./normalize-scan-result";
+import { normalizeCachedResponse } from "./normalize-scan-result";
 import type { CachedScanResponse, ScanCacheStatus, ScanResponse } from "./types";
 
 export interface ScanSnapshot extends ScanResponse {
@@ -194,10 +194,10 @@ export function toCachedResponse(
   snapshot: ScanSnapshot | null,
   status: ScanCacheStatus,
 ): CachedScanResponse {
-  return {
+  return normalizeCachedResponse({
     scannedAt: snapshot?.scannedAt ?? new Date(0).toISOString(),
     symbolCount: snapshot?.symbolCount ?? 0,
-    results: (snapshot?.results ?? []).map(normalizeScanResult),
+    results: snapshot?.results ?? [],
     sources: snapshot?.sources ?? {
       blueChips: false,
       watchlist: false,
@@ -206,5 +206,5 @@ export function toCachedResponse(
     },
     tradingViewWatchlistName: snapshot?.tradingViewWatchlistName,
     ...status,
-  };
+  });
 }

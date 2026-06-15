@@ -1,18 +1,26 @@
-import { NONE_PATTERNS } from "./patterns";
 import type {
+  CachedScanResponse,
   CrossoverDisplay,
   PatternDetection,
   StockScanResult,
   SymbolPatterns,
 } from "./types";
-import { EMPTY_CROSSOVER } from "./types";
+import { EMPTY_CROSSOVER, NONE_PATTERNS } from "./types";
 
 function normalizePattern(value: PatternDetection | undefined): PatternDetection {
-  return value ?? NONE_PATTERNS.doubleBottom;
+  if (!value || typeof value.status !== "string") {
+    return NONE_PATTERNS.doubleBottom;
+  }
+  return {
+    status: value.status,
+    timeframes: value.timeframes ?? "None",
+    confirmMsAgo: value.confirmMsAgo ?? null,
+    debug: value.debug,
+  };
 }
 
 export function normalizePatterns(
-  patterns: Partial<SymbolPatterns> | undefined,
+  patterns: Partial<SymbolPatterns> | undefined | null,
 ): SymbolPatterns {
   if (!patterns) return { ...NONE_PATTERNS };
 
@@ -37,14 +45,57 @@ export function normalizeCrossover(
   };
 }
 
+type LegacyScanRow = StockScanResult & {
+  cross?: Partial<CrossoverDisplay> | null;
+};
+
 /** Backfill fields missing from older cached snapshots. */
-export function normalizeScanResult(
-  row: StockScanResult,
-): StockScanResult {
+export function normalizeScanResult(row: LegacyScanRow): StockScanResult {
+  const legacyCross = row.cross;
+
   return {
-    ...row,
+    symbol: row.symbol ?? "UNKNOWN",
+    displayTicker: row.displayTicker ?? row.symbol ?? "—",
+    displaySymbol: row.displaySymbol ?? row.symbol ?? "—",
+    tradingViewSymbol: row.tradingViewSymbol ?? row.displaySymbol ?? row.symbol ?? "—",
+    name: row.name ?? null,
+    exchange: row.exchange ?? null,
+    price: row.price ?? null,
+    preMarketChange: row.preMarketChange ?? null,
+    regularMarketChange: row.regularMarketChange ?? null,
+    postMarketChange: row.postMarketChange ?? null,
     patterns: normalizePatterns(row.patterns),
-    cross1h: normalizeCrossover(row.cross1h),
-    cross4h: normalizeCrossover(row.cross4h),
+    ema20: row.ema20 ?? null,
+    ema50: row.ema50 ?? null,
+    ema20Above50: Boolean(row.ema20Above50),
+    cross1h: normalizeCrossover(row.cross1h ?? legacyCross),
+    cross4h: normalizeCrossover(row.cross4h ?? legacyCross),
+    tradingViewUrl: row.tradingViewUrl ?? "#",
+    error: row.error,
+  };
+}
+
+export function normalizeCachedResponse(
+  payload: Partial<CachedScanResponse> | null | undefined,
+): CachedScanResponse {
+  const results = Array.isArray(payload?.results) ? payload.results : [];
+
+  return {
+    scannedAt: payload?.scannedAt ?? new Date(0).toISOString(),
+    symbolCount: payload?.symbolCount ?? results.length,
+    results: results.map((row) => normalizeScanResult(row as LegacyScanRow)),
+    sources: payload?.sources ?? {
+      blueChips: false,
+      watchlist: false,
+      custom: false,
+      tradingViewWatchlist: false,
+    },
+    tradingViewWatchlistName: payload?.tradingViewWatchlistName,
+    stale: payload?.stale ?? true,
+    scanInProgress: payload?.scanInProgress ?? false,
+    cacheEmpty: payload?.cacheEmpty ?? results.length === 0,
+    staleAfterMinutes: payload?.staleAfterMinutes ?? 30,
+    lastError: payload?.lastError ?? null,
+    scanStartedAt: payload?.scanStartedAt ?? null,
   };
 }

@@ -24,6 +24,19 @@ export interface SymbolPatterns {
   inverseHeadShoulders: PatternDetection;
 }
 
+export const NONE_PATTERN: PatternDetection = {
+  status: "None",
+  timeframes: "None",
+  confirmMsAgo: null,
+};
+
+export const NONE_PATTERNS: SymbolPatterns = {
+  doubleBottom: NONE_PATTERN,
+  doubleTop: NONE_PATTERN,
+  headShoulders: NONE_PATTERN,
+  inverseHeadShoulders: NONE_PATTERN,
+};
+
 export interface CrossoverDisplay {
   /** ISO 8601 — format in browser for viewer local timezone */
   crossoverAt: string | null;

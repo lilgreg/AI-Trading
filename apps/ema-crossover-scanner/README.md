@@ -8,7 +8,7 @@ Rank stocks by how recently the **20 EMA crossed above the 50 EMA** — with **i
 - **Instant dashboard** — reads cached JSON snapshot in &lt;500ms
 - Dual cross columns: **Cross 1h** and **Cross 4h** (independent sort)
 - Merges **TradingView watchlist** + blue-chip defaults from env
-- Pattern detection on 1h/4h bars (DB, DT, IH&S — Active only in UI)
+- Pattern detection on 1h/4h bars (DB, DT, HS, IH&S — Active only in UI)
 - Links each row to **TradingView** for chart review
 
 ## Architecture
@@ -71,6 +71,18 @@ Open [http://localhost:3000](http://localhost:3000) — loads instantly from `.c
 | `BLOB_READ_WRITE_TOKEN` | **Vercel prod** | — | Vercel Blob store for shared cache |
 | `CRON_SECRET` | **Vercel prod** | — | Bearer token for cron route |
 | `SCAN_STALE_MINUTES` | | `30` | Cache TTL before auto-refresh |
+
+## Pattern data vs TradingView
+
+| Option | Feasibility | Notes |
+|--------|-------------|-------|
+| **Yahoo Finance 1h bars (current)** | ✅ Used | Stable on Vercel serverless; 4h bars aggregated in NY timezone to align with TV session buckets |
+| TV shared watchlist HTML | ✅ Used | Symbol list only — already merged via `TRADINGVIEW_WATCHLIST_URL` |
+| `scanner.tradingview.com` unofficial REST | ❌ Not used | Undocumented, no SLA, often blocked/rate-limited from datacenter IPs; violates TV ToS |
+| TV chart websocket (`data.tradingview.com`) | ❌ Not used | Requires session auth + persistent connection — poor fit for cron/serverless |
+| TV auto-chart-pattern labels | ❌ N/A | No public API; proprietary visual recognition |
+
+**Recommendation:** Keep Yahoo for price, EMA, and pattern bar data. Pattern columns are **algorithmic approximations** (40-day window, neckline-break confirmation) — they will not match TradingView's built-in pattern badges exactly. Each row links to TradingView for manual verification.
 
 ## Deploy to Vercel
 

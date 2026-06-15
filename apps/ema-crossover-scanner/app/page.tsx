@@ -2,8 +2,12 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { formatMsAgo } from "@/lib/ema";
-import { normalizeCrossover, normalizePatterns } from "@/lib/normalize-scan-result";
-import { patternSortKey } from "@/lib/patterns";
+import {
+  normalizeCachedResponse,
+  normalizeCrossover,
+  normalizePatterns,
+} from "@/lib/normalize-scan-result";
+import { patternSortKey } from "@/lib/pattern-sort";
 import type { CachedScanResponse, CrossoverDisplay, PatternDetection } from "@/lib/types";
 import type { StockScanResult } from "@/lib/types";
 
@@ -143,20 +147,22 @@ function CrossoverCell({
   const iso = safe.crossoverAt;
   if (iso) {
     const when = new Date(iso);
-    const dateStr = when.toLocaleDateString(undefined, { dateStyle: "short" });
-    const timeStr = when.toLocaleTimeString(undefined, { timeStyle: "short" });
+    if (!Number.isNaN(when.getTime())) {
+      const dateStr = when.toLocaleDateString(undefined, { dateStyle: "short" });
+      const timeStr = when.toLocaleTimeString(undefined, { timeStyle: "short" });
 
-    return (
-      <div>
-        <div className="font-medium">{dateStr}</div>
-        <div className="text-sm text-[var(--text)]">{timeStr}</div>
-        <div className="text-xs text-[var(--muted)]">
-          {safe.crossoverMsAgo != null
-            ? formatMsAgo(safe.crossoverMsAgo)
-            : "—"}
+      return (
+        <div>
+          <div className="font-medium">{dateStr}</div>
+          <div className="text-sm text-[var(--text)]">{timeStr}</div>
+          <div className="text-xs text-[var(--muted)]">
+            {safe.crossoverMsAgo != null
+              ? formatMsAgo(safe.crossoverMsAgo)
+              : "—"}
+          </div>
         </div>
-      </div>
-    );
+      );
+    }
   }
 
   if (safe.crossoverDate) {
@@ -233,7 +239,9 @@ export default function HomePage() {
         const body = await res.json().catch(() => ({}));
         throw new Error(body.error ?? `Scan failed (${res.status})`);
       }
-      const json = (await res.json()) as CachedScanResponse;
+      const json = normalizeCachedResponse(
+        (await res.json()) as Partial<CachedScanResponse>,
+      );
       setData(json);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load scan");
@@ -251,7 +259,9 @@ export default function HomePage() {
         const body = await res.json().catch(() => ({}));
         throw new Error(body.error ?? `Rescan failed (${res.status})`);
       }
-      const json = (await res.json()) as CachedScanResponse;
+      const json = normalizeCachedResponse(
+        (await res.json()) as Partial<CachedScanResponse>,
+      );
       setData(json);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Rescan failed");

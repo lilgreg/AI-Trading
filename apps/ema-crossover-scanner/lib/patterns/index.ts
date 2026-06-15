@@ -1,10 +1,10 @@
 import type { OhlcBar } from "../ema";
+import type { SymbolPatterns } from "../types";
 import { detectDoubleBottom } from "./double-bottom";
 import { detectDoubleTop } from "./double-top";
 import { detectHeadShoulders } from "./head-shoulders";
 import { detectInverseHeadShoulders } from "./inverse-head-shoulders";
 import type { BarTimeframe, PatternDetection } from "./types";
-import { NONE_PATTERN } from "./types";
 import { mergeMultiTimeframe, sliceRecentBars } from "./utils";
 
 export type {
@@ -17,20 +17,8 @@ export type {
 } from "./types";
 export { NONE_PATTERN } from "./types";
 export { RECENCY_DAYS, patternSortKey } from "./utils";
-
-export interface SymbolPatterns {
-  doubleBottom: PatternDetection;
-  doubleTop: PatternDetection;
-  headShoulders: PatternDetection;
-  inverseHeadShoulders: PatternDetection;
-}
-
-export const NONE_PATTERNS: SymbolPatterns = {
-  doubleBottom: NONE_PATTERN,
-  doubleTop: NONE_PATTERN,
-  headShoulders: NONE_PATTERN,
-  inverseHeadShoulders: NONE_PATTERN,
-};
+export { NONE_PATTERNS } from "../types";
+export type { SymbolPatterns } from "../types";
 
 type Detector = (
   bars: OhlcBar[],
