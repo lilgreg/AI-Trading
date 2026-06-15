@@ -1,8 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
+import { backfillMissingLogoUrls } from "@/lib/logo-backfill";
 import {
   buildCacheStatus,
   loadSnapshot,
+  saveSnapshot,
   toCachedResponse,
+  type ScanSnapshot,
 } from "@/lib/scan-cache";
 import { ensureFreshScan, runBackgroundScan } from "@/lib/scan-job";
 
@@ -17,12 +20,25 @@ function parseStatusOnly(searchParams: URLSearchParams): boolean {
   return searchParams.get("status") === "true";
 }
 
+async function ensureLogoBackfill(
+  snapshot: ScanSnapshot | null,
+): Promise<ScanSnapshot | null> {
+  if (!snapshot?.results?.length) return snapshot;
+
+  const { results, changed } = await backfillMissingLogoUrls(snapshot.results);
+  if (!changed) return snapshot;
+
+  const updated = { ...snapshot, results };
+  void saveSnapshot(updated);
+  return updated;
+}
+
 export async function GET(request: NextRequest) {
   const { searchParams } = request.nextUrl;
   const force = parseForce(searchParams);
   const statusOnly = parseStatusOnly(searchParams);
 
-  const snapshot = await loadSnapshot();
+  let snapshot = await loadSnapshot();
   let status = await buildCacheStatus(snapshot);
 
   if (statusOnly) {
@@ -45,6 +61,7 @@ export async function GET(request: NextRequest) {
     void ensureFreshScan({});
   }
 
+  snapshot = await ensureLogoBackfill(snapshot);
   status = await buildCacheStatus(snapshot);
 
   return NextResponse.json(toCachedResponse(snapshot, status), {
