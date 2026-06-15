@@ -5,13 +5,13 @@ import {
   buildLogoUrlChain,
   logoBadgeColor,
   logoInitials,
-  shouldUseInitialsOnly,
 } from "@/lib/symbol-logo";
 
 interface StockLogoProps {
   displayTicker: string;
   tradingViewSymbol?: string | null;
   yahooSymbol?: string | null;
+  companyName?: string | null;
   logoUrl?: string | null;
   className?: string;
 }
@@ -20,6 +20,7 @@ export function StockLogo({
   displayTicker,
   tradingViewSymbol,
   yahooSymbol,
+  companyName,
   logoUrl,
   className = "",
 }: StockLogoProps) {
@@ -30,14 +31,13 @@ export function StockLogo({
         tradingViewSymbol,
         yahooSymbol ?? displayTicker,
         logoUrl,
+        companyName,
       ),
-    [displayTicker, tradingViewSymbol, yahooSymbol, logoUrl],
+    [displayTicker, tradingViewSymbol, yahooSymbol, logoUrl, companyName],
   );
 
   const initials = logoInitials(displayTicker);
   const badgeColor = logoBadgeColor(displayTicker);
-  const skipImages =
-    urls.length === 0 || (shouldUseInitialsOnly(yahooSymbol ?? displayTicker) && !logoUrl);
 
   const [urlIndex, setUrlIndex] = useState(0);
 
@@ -45,7 +45,7 @@ export function StockLogo({
     setUrlIndex(0);
   }, [urls]);
 
-  const showPlaceholder = skipImages || urlIndex >= urls.length;
+  const showPlaceholder = urls.length === 0 || urlIndex >= urls.length;
 
   if (showPlaceholder) {
     return (
