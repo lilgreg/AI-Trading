@@ -24,6 +24,51 @@ function decodeHtmlEntities(value: string): string {
     .replace(/&#x27;/gi, "'");
 }
 
+function stripHtml(value: string): string {
+  return value.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function extractJsonLdDescription(html: string): string | null {
+  const scripts = html.matchAll(
+    /<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi,
+  );
+
+  for (const match of scripts) {
+    try {
+      const parsed = JSON.parse(match[1]) as unknown;
+      const items = Array.isArray(parsed) ? parsed : [parsed];
+
+      for (const item of items) {
+        if (!item || typeof item !== "object") continue;
+        const record = item as Record<string, unknown>;
+
+        if (typeof record.description === "string") {
+          const description = stripHtml(decodeHtmlEntities(record.description));
+          if (description) return description;
+        }
+
+        if (typeof record.articleBody === "string") {
+          const body = stripHtml(decodeHtmlEntities(record.articleBody));
+          if (body.length > 120) return body.slice(0, 4_000);
+        }
+      }
+    } catch {
+      // ignore malformed JSON-LD blocks
+    }
+  }
+
+  return null;
+}
+
+function longestText(...candidates: (string | null | undefined)[]): string | null {
+  let best = "";
+  for (const candidate of candidates) {
+    const trimmed = candidate?.trim();
+    if (trimmed && trimmed.length > best.length) best = trimmed;
+  }
+  return best || null;
+}
+
 export async function GET(request: Request) {
   const urlParam = new URL(request.url).searchParams.get("url");
   if (!urlParam) {
@@ -56,12 +101,17 @@ export async function GET(request: Request) {
     }
 
     const html = await res.text();
-    const raw =
-      extractMetaContent(html, "property", "og:description") ??
-      extractMetaContent(html, "name", "description") ??
-      extractMetaContent(html, "name", "twitter:description");
+    const metaSummary = longestText(
+      extractMetaContent(html, "property", "og:description"),
+      extractMetaContent(html, "name", "description"),
+      extractMetaContent(html, "name", "twitter:description"),
+      extractMetaContent(html, "property", "article:description"),
+    );
 
-    const summary = raw ? decodeHtmlEntities(raw.trim()) : null;
+    const summary = longestText(
+      metaSummary ? decodeHtmlEntities(metaSummary) : null,
+      extractJsonLdDescription(html),
+    );
     return NextResponse.json({ summary });
   } catch {
     return NextResponse.json({ summary: null });

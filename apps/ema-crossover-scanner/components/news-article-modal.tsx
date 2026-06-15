@@ -16,6 +16,15 @@ function formatSessionChange(value: number | null): string {
   return `${sign}${value.toFixed(2)}%`;
 }
 
+function longestSummary(...candidates: (string | null | undefined)[]): string | null {
+  let best = "";
+  for (const candidate of candidates) {
+    const trimmed = candidate?.trim();
+    if (trimmed && trimmed.length > best.length) best = trimmed;
+  }
+  return best || null;
+}
+
 interface NewsArticleModalProps {
   article: NewsHeadline | null;
   onClose: () => void;
@@ -53,10 +62,11 @@ export function NewsArticleModal({ article, onClose }: NewsArticleModalProps) {
   }, [article, handleClose]);
 
   useEffect(() => {
-    if (!article || article.summary) return;
+    if (!article) return;
 
     const controller = new AbortController();
-    setSummaryLoading(true);
+    const hasYahooSummary = Boolean(article.summary?.trim());
+    setSummaryLoading(!hasYahooSummary);
 
     void (async () => {
       try {
@@ -66,7 +76,7 @@ export function NewsArticleModal({ article, onClose }: NewsArticleModalProps) {
         );
         if (!res.ok) return;
         const body = (await res.json()) as { summary?: string | null };
-        if (body.summary) setFetchedSummary(body.summary);
+        if (body.summary?.trim()) setFetchedSummary(body.summary.trim());
       } catch {
         // ignore preview fetch errors
       } finally {
@@ -80,8 +90,7 @@ export function NewsArticleModal({ article, onClose }: NewsArticleModalProps) {
   if (!article) return null;
 
   const summary =
-    article.summary?.trim() ||
-    fetchedSummary?.trim() ||
+    longestSummary(article.summary, fetchedSummary) ??
     (summaryLoading ? null : article.headline);
 
   return (
@@ -130,10 +139,10 @@ export function NewsArticleModal({ article, onClose }: NewsArticleModalProps) {
         </div>
 
         <div className="news-modal-body">
-          {summaryLoading && !article.summary && !fetchedSummary ? (
-            <p className="text-sm text-[var(--muted)]">Loading summary…</p>
+          {summaryLoading && !summary ? (
+            <p className="news-modal-summary-loading">Loading summary…</p>
           ) : (
-            <p className="text-sm leading-relaxed text-[var(--text)]">{summary}</p>
+            <p className="news-modal-summary">{summary}</p>
           )}
         </div>
 
