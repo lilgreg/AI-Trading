@@ -210,7 +210,8 @@ function quotePrices(quote: Record<string, unknown>): DailyChangeQuotePrices {
   };
 
   return {
-    previousClose: num("regularMarketPreviousClose") ?? null,
+    previousClose:
+      num("regularMarketPreviousClose") ?? num("previousClose") ?? null,
     preMarketPrice: num("preMarketPrice") ?? null,
     regularMarketPrice: num("regularMarketPrice") ?? null,
     postMarketPrice: num("postMarketPrice") ?? null,
@@ -254,12 +255,18 @@ export async function fetchQuoteMeta(symbol: string): Promise<{
     const sessionChanges = filterSessionChangesForMarket(
       computeSessionChanges(raw),
     );
+    const dailyFromPrices = computeDailyChangeFromPrices(prices);
+    const dailyFromQuote =
+      typeof raw.regularMarketChangePercent === "number"
+        ? raw.regularMarketChangePercent
+        : null;
+
     return {
       name: quote.longName ?? quote.shortName ?? null,
       price: sessionAwarePrice(prices),
       exchange: quote.fullExchangeName ?? quote.exchange ?? null,
       quoteExchange: quote.exchange ?? null,
-      dailyChange: computeDailyChangeFromPrices(prices),
+      dailyChange: dailyFromPrices ?? dailyFromQuote,
       ...sessionChanges,
     };
   } catch {

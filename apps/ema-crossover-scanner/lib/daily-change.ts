@@ -4,6 +4,7 @@ import {
   type SessionChanges,
   type UsMarketSession,
 } from "./market-session";
+import type { StockScanResult } from "./types";
 
 export interface DailyChangeQuotePrices {
   previousClose: number | null;
@@ -69,13 +70,7 @@ export function computeDailyChange(
     postMarketChange,
   } satisfies SessionChanges);
 
-  const session = getUsMarketSession();
-
-  if (
-    session === "afterHours" &&
-    filtered.regularMarketChange != null &&
-    filtered.postMarketChange != null
-  ) {
+  if (filtered.regularMarketChange != null && filtered.postMarketChange != null) {
     return (
       ((1 + filtered.regularMarketChange / 100) * (1 + filtered.postMarketChange / 100) -
         1) *
@@ -85,5 +80,29 @@ export function computeDailyChange(
 
   if (filtered.regularMarketChange != null) return filtered.regularMarketChange;
   if (filtered.preMarketChange != null) return filtered.preMarketChange;
+  if (filtered.postMarketChange != null) return filtered.postMarketChange;
+
+  if (regularMarketChange != null && postMarketChange != null) {
+    return (
+      ((1 + regularMarketChange / 100) * (1 + postMarketChange / 100) - 1) * 100
+    );
+  }
+  if (regularMarketChange != null) return regularMarketChange;
+  if (preMarketChange != null) return preMarketChange;
+  if (postMarketChange != null) return postMarketChange;
   return null;
+}
+
+/** Daily % for a scan row — live quote first, then cached session fields. */
+export function dailyChangeForScanRow(
+  row: StockScanResult,
+  quoteDailyChange?: number | null,
+): number | null {
+  if (quoteDailyChange != null) return quoteDailyChange;
+
+  return computeDailyChange(
+    row.preMarketChange,
+    row.regularMarketChange,
+    row.postMarketChange,
+  );
 }

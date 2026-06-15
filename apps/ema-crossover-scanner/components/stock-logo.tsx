@@ -67,6 +67,7 @@ export function StockLogo({
       height={26}
       loading="lazy"
       decoding="async"
+      referrerPolicy="no-referrer"
       className={`stock-logo h-[26px] w-[26px] shrink-0 rounded-md object-contain bg-[var(--surface-2)] ${className}`}
       onError={() => setUrlIndex((i) => i + 1)}
     />

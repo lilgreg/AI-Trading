@@ -1,7 +1,6 @@
 import YahooFinance from "yahoo-finance2";
-import { computeDailyChange } from "./daily-change";
+import { dailyChangeForScanRow } from "./daily-change";
 import { formatMsAgo } from "./ema";
-import { filterSessionChangesForMarket } from "./market-session";
 import { normalizeCrossover } from "./normalize-scan-result";
 import { fetchQuoteUpdates } from "./quotes";
 import type { StockScanResult } from "./types";
@@ -52,19 +51,7 @@ function dailyChangeForRow(
   row: StockScanResult,
   quoteDailyChange?: number | null,
 ): number | null {
-  if (quoteDailyChange != null) return quoteDailyChange;
-
-  const filtered = filterSessionChangesForMarket({
-    preMarketChange: row.preMarketChange,
-    regularMarketChange: row.regularMarketChange,
-    postMarketChange: row.postMarketChange,
-  });
-
-  return computeDailyChange(
-    filtered.preMarketChange,
-    filtered.regularMarketChange,
-    filtered.postMarketChange,
-  );
+  return dailyChangeForScanRow(row, quoteDailyChange);
 }
 
 async function fetchSymbolNews(
