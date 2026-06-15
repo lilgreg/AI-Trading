@@ -19,11 +19,9 @@ npm run dev
 
 ## Deploy (Vercel)
 
-Import this repository in Vercel and set **Root Directory** to:
+**Live:** https://ai-trading-scanner.vercel.app
 
-```
-apps/ema-crossover-scanner
-```
+This repo is connected to the Vercel project `ai-trading-scanner`. Set **Root Directory** to `apps/ema-crossover-scanner` (already configured).
 
 Optional env vars: `WATCHLIST_SYMBOLS`, `INCLUDE_BLUE_CHIPS`, `HISTORY_DAYS`.
 
