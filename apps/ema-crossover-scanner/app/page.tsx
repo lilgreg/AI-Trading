@@ -601,20 +601,8 @@ export default function HomePage() {
       let cmp = 0;
 
       if (sortKey === "session") {
-        const sessionVal = (row: StockScanResult) => {
-          const fromQuote = quoteDailyBySymbol.get(row.symbol);
-          if (fromQuote != null) return fromQuote;
-          const filtered = filterSessionChangesForMarket({
-            preMarketChange: row.preMarketChange,
-            regularMarketChange: row.regularMarketChange,
-            postMarketChange: row.postMarketChange,
-          });
-          return computeDailyChange(
-            filtered.preMarketChange,
-            filtered.regularMarketChange,
-            filtered.postMarketChange,
-          );
-        };
+        const sessionVal = (row: StockScanResult) =>
+          dailyChangeForScanRow(row, quoteDailyBySymbol.get(row.symbol));
         const aVal = sessionVal(a);
         const bVal = sessionVal(b);
         if (aVal == null && bVal == null) cmp = 0;
