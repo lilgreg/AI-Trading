@@ -1,13 +1,25 @@
-export type PatternStatus = "Active" | "Failed" | "Completed" | "None";
+export type PatternStatus = "Active" | "Failed" | "Target" | "None";
 export type PatternTimeframe = "1h" | "4h" | "1h+4h" | "None";
 
 export interface PatternDetection {
   status: PatternStatus;
   timeframes: PatternTimeframe;
+  confirmMsAgo: number | null;
+  /** Present when API called with ?debug=true */
+  debug?: {
+    support?: number;
+    neckline?: number;
+    target?: number;
+    confirmDate?: string;
+    patternAgeDays?: number;
+    status1h?: PatternStatus;
+    status4h?: PatternStatus;
+  };
 }
 
 export interface SymbolPatterns {
   doubleBottom: PatternDetection;
+  doubleTop: PatternDetection;
   inverseHeadShoulders: PatternDetection;
 }
 
@@ -27,7 +39,7 @@ export interface StockScanResult {
   regularMarketChange: number | null;
   /** After-hours % change vs regular close (Yahoo quote) */
   postMarketChange: number | null;
-  /** Double-bottom and inverse H&S on 1h / 4h bars */
+  /** Recent chart patterns on 1h / 4h bars (40-day window) */
   patterns: SymbolPatterns;
   ema20: number | null;
   ema50: number | null;

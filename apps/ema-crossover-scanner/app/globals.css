@@ -49,6 +49,12 @@ body {
   border: 1px solid var(--border);
 }
 
+.badge-blue {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
 .btn {
   display: inline-flex;
   align-items: center;
@@ -109,6 +115,15 @@ table.scan-table th {
   font-weight: 500;
   border-bottom: 1px solid var(--border);
   white-space: nowrap;
+}
+
+table.scan-table th.sortable {
+  cursor: pointer;
+  user-select: none;
+}
+
+table.scan-table th.sortable:hover {
+  color: var(--text);
 }
 
 table.scan-table td {

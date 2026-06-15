@@ -3,8 +3,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { formatMsAgo } from "@/lib/ema";
 import type { ScanInterval } from "@/lib/intervals";
+import { patternSortKey } from "@/lib/patterns";
 import type { PatternDetection } from "@/lib/types";
-import type { ScanResponse, StockScanResult } from "@/lib/types";
+import type { ScanResponse, StockScanResult, SymbolPatterns } from "@/lib/types";
+
+type SortKey = "session" | "patterns" | "crossover";
+type SortDir = "asc" | "desc";
 
 function formatPrice(value: number | null): string {
   if (value == null) return "—";
@@ -46,11 +50,11 @@ function SessionChangesCell({ row }: { row: StockScanResult }) {
   }
 
   return (
-    <div className="space-y-0.5 text-xs leading-tight">
+    <div className="space-y-0.5 text-sm leading-snug">
       {rows.map(({ label, value }) => (
         <div key={label} className="flex items-baseline gap-2">
-          <span className="w-7 shrink-0 text-[var(--muted)]">{label}</span>
-          <span className={`mono ${changeColorClass(value)}`}>
+          <span className="w-8 shrink-0 text-[var(--muted)]">{label}</span>
+          <span className={`mono text-base ${changeColorClass(value)}`}>
             {formatSessionChange(value)}
           </span>
         </div>
@@ -61,32 +65,48 @@ function SessionChangesCell({ row }: { row: StockScanResult }) {
 
 function patternBadgeClass(status: PatternDetection["status"]): string {
   if (status === "Active") return "badge-amber";
-  if (status === "Completed") return "badge-green";
-  if (status === "Failed") return "badge-red";
+  if (status === "Target") return "badge-green";
+  if (status === "Failed") return "badge-blue";
   return "badge-muted";
 }
 
-function formatPatternLine(prefix: string, pattern: PatternDetection): string {
-  if (pattern.status === "None") return `${prefix}: None`;
-  if (pattern.timeframes === "None") return `${prefix}: ${pattern.status}`;
-  return `${prefix}: ${pattern.status} (${pattern.timeframes})`;
+function formatPatternLabel(prefix: string, pattern: PatternDetection): string | null {
+  if (pattern.status === "None") return null;
+  const tf =
+    pattern.timeframes !== "None" ? ` (${pattern.timeframes})` : "";
+  return `${prefix} ${pattern.status}${tf}`;
 }
 
 function PatternsCell({ patterns }: { patterns: StockScanResult["patterns"] }) {
   const lines = [
-    { key: "db", text: formatPatternLine("DB", patterns.doubleBottom), status: patterns.doubleBottom.status },
+    {
+      key: "db",
+      text: formatPatternLabel("DB", patterns.doubleBottom),
+      status: patterns.doubleBottom.status,
+    },
+    {
+      key: "dt",
+      text: formatPatternLabel("DT", patterns.doubleTop),
+      status: patterns.doubleTop.status,
+    },
     {
       key: "ihs",
-      text: formatPatternLine("IH&S", patterns.inverseHeadShoulders),
+      text: formatPatternLabel("IH&S", patterns.inverseHeadShoulders),
       status: patterns.inverseHeadShoulders.status,
     },
-  ];
+  ].filter((line) => line.text != null);
+
+  if (lines.length === 0) {
+    return <span className="text-sm text-[var(--muted)]">None</span>;
+  }
 
   return (
-    <div className="space-y-1 text-xs leading-tight">
+    <div className="space-y-1 text-sm leading-snug">
       {lines.map(({ key, text, status }) => (
         <div key={key}>
-          <span className={`${patternBadgeClass(status)} inline-block rounded-full px-2 py-0.5`}>
+          <span
+            className={`${patternBadgeClass(status)} inline-block rounded-full px-2.5 py-0.5 text-sm`}
+          >
             {text}
           </span>
         </div>
@@ -125,8 +145,28 @@ function CrossoverCell({ row }: { row: StockScanResult }) {
   );
 }
 
+function rowPatternSortKey(patterns: SymbolPatterns): number {
+  return Math.min(
+    patternSortKey(patterns.doubleBottom),
+    patternSortKey(patterns.doubleTop),
+    patternSortKey(patterns.inverseHeadShoulders),
+  );
+}
+
+function ariaSortValue(key: SortKey, activeKey: SortKey, dir: SortDir) {
+  if (key !== activeKey) return "none" as const;
+  return dir === "asc" ? ("ascending" as const) : ("descending" as const);
+}
+
+function sortIndicator(active: boolean, dir: SortDir): string {
+  if (!active) return "";
+  return dir === "asc" ? " ↑" : " ↓";
+}
+
 const DEFAULT_TV_WATCHLIST =
   "https://www.tradingview.com/watchlists/156233778/";
+
+const SCAN_TIMEOUT_MS = 280_000;
 
 export default function HomePage() {
   const [data, setData] = useState<ScanResponse | null>(null);
@@ -137,10 +177,15 @@ export default function HomePage() {
   const [watchlist, setWatchlist] = useState("");
   const [tvWatchlistUrl, setTvWatchlistUrl] = useState(DEFAULT_TV_WATCHLIST);
   const [interval, setInterval] = useState<ScanInterval>("4h");
+  const [sortKey, setSortKey] = useState<SortKey>("crossover");
+  const [sortDir, setSortDir] = useState<SortDir>("asc");
 
   const runScan = useCallback(async () => {
     setLoading(true);
     setError(null);
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), SCAN_TIMEOUT_MS);
 
     try {
       const params = new URLSearchParams();
@@ -150,7 +195,9 @@ export default function HomePage() {
       if (tvWatchlistUrl.trim()) params.set("tvWatchlist", tvWatchlistUrl.trim());
       params.set("interval", interval);
 
-      const res = await fetch(`/api/scan?${params.toString()}`);
+      const res = await fetch(`/api/scan?${params.toString()}`, {
+        signal: controller.signal,
+      });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         throw new Error(body.error ?? `Scan failed (${res.status})`);
@@ -159,8 +206,13 @@ export default function HomePage() {
       const json: ScanResponse = await res.json();
       setData(json);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Scan failed");
+      if (err instanceof Error && err.name === "AbortError") {
+        setError("Scan timed out — try again or reduce the symbol list.");
+      } else {
+        setError(err instanceof Error ? err.message : "Scan failed");
+      }
     } finally {
+      clearTimeout(timer);
       setLoading(false);
     }
   }, [includeBlueChips, onlyAbove, watchlist, tvWatchlistUrl, interval]);
@@ -168,6 +220,46 @@ export default function HomePage() {
   useEffect(() => {
     void runScan();
   }, [runScan]);
+
+  const handleSort = (key: SortKey) => {
+    if (sortKey === key) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setSortKey(key);
+      setSortDir(key === "crossover" || key === "patterns" ? "asc" : "desc");
+    }
+  };
+
+  const sortedResults = useMemo(() => {
+    if (!data?.results) return [];
+    const rows = [...data.results];
+
+    rows.sort((a, b) => {
+      let cmp = 0;
+
+      if (sortKey === "session") {
+        const aVal = a.regularMarketChange;
+        const bVal = b.regularMarketChange;
+        if (aVal == null && bVal == null) cmp = 0;
+        else if (aVal == null) cmp = 1;
+        else if (bVal == null) cmp = -1;
+        else cmp = aVal - bVal;
+      } else if (sortKey === "patterns") {
+        cmp = rowPatternSortKey(a.patterns) - rowPatternSortKey(b.patterns);
+      } else {
+        const aVal = a.crossoverMsAgo;
+        const bVal = b.crossoverMsAgo;
+        if (aVal == null && bVal == null) cmp = 0;
+        else if (aVal == null) cmp = 1;
+        else if (bVal == null) cmp = -1;
+        else cmp = aVal - bVal;
+      }
+
+      return sortDir === "asc" ? cmp : -cmp;
+    });
+
+    return rows;
+  }, [data, sortKey, sortDir]);
 
   const stats = useMemo(() => {
     if (!data) return { above: 0, withCross: 0, errors: 0 };
@@ -320,12 +412,30 @@ export default function HomePage() {
                 <th>Symbol</th>
                 <th>Name</th>
                 <th>Price</th>
-                <th>Session Δ</th>
-                <th>Patterns</th>
+                <th
+                  className="sortable"
+                  onClick={() => handleSort("session")}
+                  aria-sort={ariaSortValue("session", sortKey, sortDir)}
+                >
+                  Session Δ{sortIndicator(sortKey === "session", sortDir)}
+                </th>
+                <th
+                  className="sortable"
+                  onClick={() => handleSort("patterns")}
+                  aria-sort={ariaSortValue("patterns", sortKey, sortDir)}
+                >
+                  Patterns{sortIndicator(sortKey === "patterns", sortDir)}
+                </th>
                 <th>20 EMA</th>
                 <th>50 EMA</th>
                 <th>Status</th>
-                <th>Last bullish cross</th>
+                <th
+                  className="sortable"
+                  onClick={() => handleSort("crossover")}
+                  aria-sort={ariaSortValue("crossover", sortKey, sortDir)}
+                >
+                  Last bullish cross{sortIndicator(sortKey === "crossover", sortDir)}
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -335,11 +445,17 @@ export default function HomePage() {
                     Fetching market data and computing EMAs…
                   </td>
                 </tr>
+              ) : sortedResults.length === 0 ? (
+                <tr>
+                  <td colSpan={10} className="py-12 text-center text-[var(--muted)]">
+                    No scan results.
+                  </td>
+                </tr>
               ) : (
-                data?.results.map((row, index) => (
+                sortedResults.map((row, index) => (
                   <tr key={row.symbol}>
                     <td className="text-[var(--muted)]">{index + 1}</td>
-                    <td className="mono font-medium">
+                    <td className="mono text-base font-semibold">
                       <a
                         href={row.tradingViewUrl}
                         target="_blank"
@@ -388,8 +504,10 @@ export default function HomePage() {
       </section>
 
       <footer className="mt-8 text-xs text-[var(--muted)]">
-        Price data via Yahoo Finance ({interval} candles). Cross requires 20 EMA to cross
-        below 50 before crossing back above. Not financial advice.
+        Price data via Yahoo Finance ({interval} candles). Pattern labels are
+        algorithmic approximations on 1h/4h bars (40-day window) — not TradingView
+        auto-chart-patterns (no public API). Cross requires 20 EMA to cross below 50
+        before crossing back above. Not financial advice.
       </footer>
     </main>
   );

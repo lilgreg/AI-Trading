@@ -1,5 +1,90 @@
 import type { OhlcBar } from "../ema";
-import type { PatternDetection, PatternLevels, PatternStatus, PatternTimeframe } from "./types";
+import type {
+  BarTimeframe,
+  BearishPatternLevels,
+  BullishPatternLevels,
+  PatternDetection,
+  PatternEvalResult,
+  PatternStatus,
+  PatternTimeframe,
+} from "./types";
+
+/**
+ * Algorithmic pattern detection — NOT TradingView auto-chart-patterns.
+ * TradingView has no public pattern API; thresholds here prioritize fewer
+ * false positives over matching TV's proprietary visual recognition.
+ */
+export const RECENCY_DAYS = 40;
+export const RECENCY_MS = RECENCY_DAYS * 24 * 60 * 60 * 1000;
+
+export interface BullishPatternParams {
+  swingWindow: number;
+  minBarsBetween: number;
+  maxBarsBetween: number;
+  maxRecencyBars: number;
+  lowTolerance: number;
+  minNecklineLift: number;
+  shoulderTolerance: number;
+  minHeadDepth: number;
+  maxPatternSpan: number;
+}
+
+export interface BearishPatternParams {
+  swingWindow: number;
+  minBarsBetween: number;
+  maxBarsBetween: number;
+  maxRecencyBars: number;
+  highTolerance: number;
+  minNecklineDrop: number;
+}
+
+export function getBullishParams(tf: BarTimeframe): BullishPatternParams {
+  if (tf === "4h") {
+    return {
+      swingWindow: 3,
+      minBarsBetween: 8,
+      maxBarsBetween: 50,
+      maxRecencyBars: 60,
+      lowTolerance: 0.01,
+      minNecklineLift: 0.04,
+      shoulderTolerance: 0.012,
+      minHeadDepth: 0.04,
+      maxPatternSpan: 60,
+    };
+  }
+  return {
+    swingWindow: 3,
+    minBarsBetween: 12,
+    maxBarsBetween: 120,
+    maxRecencyBars: 240,
+    lowTolerance: 0.01,
+    minNecklineLift: 0.04,
+    shoulderTolerance: 0.012,
+    minHeadDepth: 0.05,
+    maxPatternSpan: 150,
+  };
+}
+
+export function getBearishParams(tf: BarTimeframe): BearishPatternParams {
+  if (tf === "4h") {
+    return {
+      swingWindow: 3,
+      minBarsBetween: 5,
+      maxBarsBetween: 55,
+      maxRecencyBars: 60,
+      highTolerance: 0.012,
+      minNecklineDrop: 0.03,
+    };
+  }
+  return {
+    swingWindow: 3,
+    minBarsBetween: 10,
+    maxBarsBetween: 140,
+    maxRecencyBars: 240,
+    highTolerance: 0.012,
+    minNecklineDrop: 0.03,
+  };
+}
 
 export function barLow(bar: OhlcBar): number {
   return bar.low ?? bar.close;
@@ -9,19 +94,77 @@ export function barHigh(bar: OhlcBar): number {
   return bar.high ?? bar.close;
 }
 
-/** Local minima where the bar low is at or below adjacent bars. */
-export function findSwingLowIndices(bars: OhlcBar[]): number[] {
+export function barClose(bar: OhlcBar): number {
+  return bar.close;
+}
+
+export function sliceRecentBars(bars: OhlcBar[], days: number = RECENCY_DAYS + 10): OhlcBar[] {
+  if (bars.length === 0) return bars;
+  const cutoff = bars.at(-1)!.date.getTime() - days * 24 * 60 * 60 * 1000;
+  return bars.filter((b) => b.date.getTime() >= cutoff);
+}
+
+export function msAgoFromBar(bars: OhlcBar[], idx: number): number {
+  return bars.at(-1)!.date.getTime() - bars[idx].date.getTime();
+}
+
+export function patternAgeDays(bars: OhlcBar[], idx: number): number {
+  return Math.round(msAgoFromBar(bars, idx) / (24 * 60 * 60 * 1000));
+}
+
+export function isWithinRecency(bars: OhlcBar[], idx: number): boolean {
+  return msAgoFromBar(bars, idx) <= RECENCY_MS;
+}
+
+export function isConfirmRecent(
+  bars: OhlcBar[],
+  confirmIdx: number,
+  maxRecencyBars: number,
+): boolean {
+  return bars.length - 1 - confirmIdx <= maxRecencyBars;
+}
+
+/** Local minima — low must be lowest across ±swingWindow bars. */
+export function findSwingLowIndices(bars: OhlcBar[], swingWindow = 3): number[] {
   const indices: number[] = [];
-  for (let i = 1; i < bars.length - 1; i++) {
+  for (let i = swingWindow; i < bars.length - swingWindow; i++) {
     const low = barLow(bars[i]);
-    if (low <= barLow(bars[i - 1]) && low <= barLow(bars[i + 1])) {
-      indices.push(i);
+    let isSwing = true;
+    for (let j = 1; j <= swingWindow; j++) {
+      if (low > barLow(bars[i - j]) || low > barLow(bars[i + j])) {
+        isSwing = false;
+        break;
+      }
     }
+    if (isSwing) indices.push(i);
+  }
+  return indices;
+}
+
+/** Local maxima — high must be highest across ±swingWindow bars. */
+export function findSwingHighIndices(bars: OhlcBar[], swingWindow = 3): number[] {
+  const indices: number[] = [];
+  for (let i = swingWindow; i < bars.length - swingWindow; i++) {
+    const high = barHigh(bars[i]);
+    let isSwing = true;
+    for (let j = 1; j <= swingWindow; j++) {
+      if (high < barHigh(bars[i - j]) || high < barHigh(bars[i + j])) {
+        isSwing = false;
+        break;
+      }
+    }
+    if (isSwing) indices.push(i);
   }
   return indices;
 }
 
 export function lowsWithinTolerance(a: number, b: number, tolerance: number): boolean {
+  const avg = (a + b) / 2;
+  if (avg === 0) return false;
+  return Math.abs(a - b) / avg <= tolerance;
+}
+
+export function highsWithinTolerance(a: number, b: number, tolerance: number): boolean {
   const avg = (a + b) / 2;
   if (avg === 0) return false;
   return Math.abs(a - b) / avg <= tolerance;
@@ -34,64 +177,270 @@ export function resolveCurrentPrice(
   return currentPrice ?? bars.at(-1)?.close ?? null;
 }
 
-/** Status after pattern confirmation bar through current price. */
-export function evaluatePatternStatus(
+/** After confirmation, price must close above neckline (breakout) to qualify as Active. */
+export function hasNecklineBreakout(
   bars: OhlcBar[],
-  pattern: PatternLevels,
-  currentPrice: number,
-): PatternStatus {
-  const { confirmIdx, support, target } = pattern;
+  confirmIdx: number,
+  neckline: number,
+): boolean {
+  const threshold = neckline * 1.001;
+  for (let i = confirmIdx + 1; i < bars.length; i++) {
+    if (barClose(bars[i]) >= threshold || barHigh(bars[i]) >= threshold) {
+      return true;
+    }
+  }
+  return false;
+}
 
-  for (let i = confirmIdx; i < bars.length; i++) {
-    if (barLow(bars[i]) < support) return "Failed";
-    if (barHigh(bars[i]) >= target) return "Completed";
+const NONE_RESULT: PatternEvalResult = { status: "None", confirmMsAgo: null };
+
+/** Bullish pattern lifecycle after confirmation (DB, IH&S). */
+export function evaluateBullishPatternStatus(
+  bars: OhlcBar[],
+  pattern: BullishPatternLevels,
+  currentPrice: number,
+  maxRecencyBars: number,
+  options: {
+    allowForming?: boolean;
+    minAboveNeckline?: number;
+    showTarget?: boolean;
+    minBarsAfterConfirm?: number;
+    maxBarsAfterConfirm?: number;
+  } = {},
+): PatternEvalResult {
+  const {
+    allowForming = false,
+    minAboveNeckline = 1.005,
+    showTarget = true,
+    minBarsAfterConfirm = 3,
+    maxBarsAfterConfirm = 50,
+  } = options;
+  const { confirmIdx, support, neckline, target } = pattern;
+
+  if (
+    !isWithinRecency(bars, confirmIdx) ||
+    !isConfirmRecent(bars, confirmIdx, maxRecencyBars)
+  ) {
+    return NONE_RESULT;
   }
 
-  if (currentPrice < support) return "Failed";
-  if (currentPrice >= target) return "Completed";
-  if (currentPrice > support && currentPrice < target) return "Active";
+  const barsAfterConfirm = bars.length - 1 - confirmIdx;
+  if (
+    barsAfterConfirm < minBarsAfterConfirm ||
+    barsAfterConfirm > maxBarsAfterConfirm
+  ) {
+    return NONE_RESULT;
+  }
 
-  return "None";
+  const confirmMsAgo = msAgoFromBar(bars, confirmIdx);
+  let targetHitIdx: number | null = null;
+  let failedIdx: number | null = null;
+
+  for (let i = confirmIdx; i < bars.length; i++) {
+    if (barLow(bars[i]) < support * 0.995) {
+      failedIdx = i;
+      break;
+    }
+    if (barHigh(bars[i]) >= target) {
+      targetHitIdx = i;
+      break;
+    }
+  }
+
+  if (targetHitIdx == null && currentPrice >= target) targetHitIdx = bars.length - 1;
+  if (failedIdx == null && currentPrice < support * 0.995) failedIdx = bars.length - 1;
+
+  if (targetHitIdx != null && isWithinRecency(bars, targetHitIdx) && showTarget) {
+    return { status: "Target", confirmMsAgo, levels: pattern };
+  }
+
+  if (failedIdx != null && isWithinRecency(bars, failedIdx)) {
+    // Broke support — bearish, not actionable for bullish scanner.
+    return NONE_RESULT;
+  }
+
+  const confirmedActive =
+    targetHitIdx == null &&
+    failedIdx == null &&
+    currentPrice > support * 1.01 &&
+    currentPrice > neckline * minAboveNeckline &&
+    currentPrice < target &&
+    hasNecklineBreakout(bars, confirmIdx, neckline);
+
+  const formingActive =
+    allowForming &&
+    targetHitIdx == null &&
+    failedIdx == null &&
+    currentPrice > support * 1.01 &&
+    currentPrice >= neckline * 0.9 &&
+    currentPrice <= neckline * 1.002 &&
+    currentPrice < target;
+
+  if (confirmedActive || formingActive) {
+    return { status: "Active", confirmMsAgo, levels: pattern };
+  }
+
+  return NONE_RESULT;
+}
+
+/**
+ * Bearish pattern lifecycle (double top).
+ * Failed = broke below neckline recently → bullish reversal setup.
+ */
+export function evaluateBearishPatternStatus(
+  bars: OhlcBar[],
+  pattern: BearishPatternLevels,
+  currentPrice: number,
+  maxRecencyBars: number,
+): PatternEvalResult {
+  const { confirmIdx, resistance, neckline, target } = pattern;
+
+  if (
+    !isWithinRecency(bars, confirmIdx) ||
+    !isConfirmRecent(bars, confirmIdx, maxRecencyBars)
+  ) {
+    return NONE_RESULT;
+  }
+
+  const confirmMsAgo = msAgoFromBar(bars, confirmIdx);
+  let targetHitIdx: number | null = null;
+  let failedIdx: number | null = null;
+
+  for (let i = confirmIdx; i < bars.length; i++) {
+    if (barLow(bars[i]) < neckline * 0.999) {
+      failedIdx = i;
+      break;
+    }
+    if (barLow(bars[i]) <= target) {
+      targetHitIdx = i;
+      break;
+    }
+  }
+
+  if (targetHitIdx == null && currentPrice <= target) targetHitIdx = bars.length - 1;
+  if (failedIdx == null && currentPrice < neckline * 0.999) failedIdx = bars.length - 1;
+
+  if (failedIdx != null && isWithinRecency(bars, failedIdx)) {
+    return { status: "Failed", confirmMsAgo, levels: pattern };
+  }
+
+  if (targetHitIdx != null && isWithinRecency(bars, targetHitIdx)) {
+    return NONE_RESULT;
+  }
+
+  if (
+    targetHitIdx == null &&
+    failedIdx == null &&
+    currentPrice >= neckline &&
+    currentPrice <= resistance
+  ) {
+    return { status: "Active", confirmMsAgo, levels: pattern };
+  }
+
+  return NONE_RESULT;
 }
 
 const STATUS_PRIORITY: Record<PatternStatus, number> = {
-  Active: 3,
-  Failed: 2,
-  Completed: 1,
+  Active: 4,
+  Failed: 3,
+  Target: 2,
   None: 0,
 };
 
-function timeframesFromMatches(
-  matches: { tf: "1h" | "4h"; status: PatternStatus }[],
-): PatternTimeframe {
-  const has1h = matches.some((m) => m.tf === "1h");
-  const has4h = matches.some((m) => m.tf === "4h");
-  if (has1h && has4h) return "1h+4h";
-  if (has1h) return "1h";
-  if (has4h) return "4h";
-  return "None";
-}
-
-/** Merge independent 1h / 4h detections; Active beats Failed beats Completed. */
+/**
+ * Merge 1h / 4h results.
+ * "1h+4h" ONLY when both timeframes detect the same non-None status independently.
+ */
 export function mergeMultiTimeframe(
-  oneHour: PatternStatus,
-  fourHour: PatternStatus,
+  oneHour: PatternEvalResult,
+  fourHour: PatternEvalResult,
+  includeDebug = false,
 ): PatternDetection {
-  const entries: { tf: "1h" | "4h"; status: PatternStatus }[] = [
-    { tf: "1h", status: oneHour },
-    { tf: "4h", status: fourHour },
-  ];
-
-  const detected = entries.filter((e) => e.status !== "None");
-  if (detected.length === 0) {
-    return { status: "None", timeframes: "None" };
+  if (oneHour.status === "None" && fourHour.status === "None") {
+    return { status: "None", timeframes: "None", confirmMsAgo: null };
   }
 
-  const topPriority = Math.max(...detected.map((e) => STATUS_PRIORITY[e.status]));
-  const winning = detected.filter((e) => STATUS_PRIORITY[e.status] === topPriority);
+  let status: PatternStatus;
+  let timeframes: PatternTimeframe;
+  let confirmMsAgo: number | null;
 
-  return {
-    status: winning[0].status,
-    timeframes: timeframesFromMatches(winning),
+  if (
+    oneHour.status !== "None" &&
+    fourHour.status !== "None" &&
+    oneHour.status === fourHour.status
+  ) {
+    status = oneHour.status;
+    timeframes = "1h+4h";
+    confirmMsAgo = Math.min(
+      oneHour.confirmMsAgo ?? Number.MAX_SAFE_INTEGER,
+      fourHour.confirmMsAgo ?? Number.MAX_SAFE_INTEGER,
+    );
+    if (!Number.isFinite(confirmMsAgo)) confirmMsAgo = null;
+  } else {
+    const candidates = [
+      { tf: "1h" as const, result: oneHour },
+      { tf: "4h" as const, result: fourHour },
+    ].filter((c) => c.result.status !== "None");
+
+    candidates.sort((a, b) => {
+      const prio =
+        STATUS_PRIORITY[b.result.status] - STATUS_PRIORITY[a.result.status];
+      if (prio !== 0) return prio;
+      return (
+        (a.result.confirmMsAgo ?? Number.MAX_SAFE_INTEGER) -
+        (b.result.confirmMsAgo ?? Number.MAX_SAFE_INTEGER)
+      );
+    });
+
+    const best = candidates[0];
+    status = best.result.status;
+    timeframes = best.tf;
+    confirmMsAgo = best.result.confirmMsAgo;
+  }
+
+  const detection: PatternDetection = { status, timeframes, confirmMsAgo };
+
+  if (includeDebug) {
+    const levels =
+      oneHour.status !== "None"
+        ? oneHour.levels
+        : fourHour.status !== "None"
+          ? fourHour.levels
+          : undefined;
+
+    detection.debug = {
+      status1h: oneHour.status,
+      status4h: fourHour.status,
+    };
+
+    if (confirmMsAgo != null) {
+      detection.debug.patternAgeDays = Math.round(
+        confirmMsAgo / (24 * 60 * 60 * 1000),
+      );
+    }
+
+    if (levels && "support" in levels) {
+      detection.debug.support = Math.round(levels.support * 100) / 100;
+      detection.debug.neckline = Math.round(levels.neckline * 100) / 100;
+      detection.debug.target = Math.round(levels.target * 100) / 100;
+    } else if (levels && "resistance" in levels) {
+      detection.debug.neckline = Math.round(levels.neckline * 100) / 100;
+      detection.debug.target = Math.round(levels.target * 100) / 100;
+    }
+  }
+
+  return detection;
+}
+
+/** Client-side sort key: lower = more interesting (Active, then recent). */
+export function patternSortKey(detection: PatternDetection): number {
+  const tier: Record<PatternStatus, number> = {
+    Active: 0,
+    Failed: 100,
+    Target: 200,
+    None: 1000,
   };
+  const base = tier[detection.status];
+  const recency = detection.confirmMsAgo ?? Number.MAX_SAFE_INTEGER;
+  return base + recency / 1e15;
 }

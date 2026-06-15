@@ -1,26 +1,21 @@
 import type { OhlcBar } from "../ema";
-import type { PatternLevels, PatternStatus } from "./types";
+import type { BarTimeframe, BullishPatternLevels, PatternEvalResult } from "./types";
 import {
   barHigh,
   barLow,
-  evaluatePatternStatus,
+  evaluateBullishPatternStatus,
   findSwingLowIndices,
+  getBullishParams,
   lowsWithinTolerance,
   resolveCurrentPrice,
 } from "./utils";
 
-const SHOULDER_TOLERANCE = 0.04;
-const MIN_BARS_BETWEEN_PIVOTS = 3;
-const MAX_BARS_SPAN = 120;
-const MIN_HEAD_DEPTH = 0.02;
-const MIN_NECKLINE_LIFT = 0.01;
-
-/**
- * Inverse H&S: left shoulder, lower head, right shoulder; neckline from intervening peaks.
- * Support = lowest of the three lows. Algorithmic — not TradingView-identical.
- */
-function findMostRecentPattern(bars: OhlcBar[]): PatternLevels | null {
-  const swingLows = findSwingLowIndices(bars);
+function findMostRecentPattern(
+  bars: OhlcBar[],
+  tf: BarTimeframe,
+): BullishPatternLevels | null {
+  const params = getBullishParams(tf);
+  const swingLows = findSwingLowIndices(bars, params.swingWindow);
   if (swingLows.length < 3) return null;
 
   for (let r = swingLows.length - 1; r >= 2; r--) {
@@ -31,21 +26,23 @@ function findMostRecentPattern(bars: OhlcBar[]): PatternLevels | null {
       const headIdx = swingLows[h];
       const headLow = barLow(bars[headIdx]);
 
-      if (rightIdx - headIdx < MIN_BARS_BETWEEN_PIVOTS) continue;
+      if (rightIdx - headIdx < params.minBarsBetween) continue;
 
       for (let l = h - 1; l >= 0; l--) {
         const leftIdx = swingLows[l];
         const leftLow = barLow(bars[leftIdx]);
 
-        if (headIdx - leftIdx < MIN_BARS_BETWEEN_PIVOTS) continue;
-        if (rightIdx - leftIdx > MAX_BARS_SPAN) continue;
+        if (headIdx - leftIdx < params.minBarsBetween) continue;
+        if (rightIdx - leftIdx > params.maxPatternSpan) continue;
 
-        if (headLow >= leftLow || headLow >= rightLow) continue;
-        if (!lowsWithinTolerance(leftLow, rightLow, SHOULDER_TOLERANCE)) continue;
+        if (headLow >= leftLow * 0.998 || headLow >= rightLow * 0.998) continue;
+        if (!lowsWithinTolerance(leftLow, rightLow, params.shoulderTolerance)) {
+          continue;
+        }
 
         const shoulderAvg = (leftLow + rightLow) / 2;
         if (shoulderAvg === 0) continue;
-        if ((shoulderAvg - headLow) / shoulderAvg < MIN_HEAD_DEPTH) continue;
+        if ((shoulderAvg - headLow) / shoulderAvg < params.minHeadDepth) continue;
 
         let leftPeak = -Infinity;
         for (let i = leftIdx + 1; i < headIdx; i++) {
@@ -60,10 +57,15 @@ function findMostRecentPattern(bars: OhlcBar[]): PatternLevels | null {
         const neckline = Math.min(leftPeak, rightPeak);
         const support = Math.min(headLow, leftLow, rightLow);
         const lift = (neckline - support) / support;
-        if (lift < MIN_NECKLINE_LIFT) continue;
+        if (lift < params.minNecklineLift) continue;
+
+        // Shoulder peaks should be roughly level (symmetric neckline).
+        const peakAvg = (leftPeak + rightPeak) / 2;
+        if (peakAvg === 0) continue;
+        if (Math.abs(leftPeak - rightPeak) / peakAvg > 0.015) continue;
 
         const target = neckline + (neckline - headLow);
-        if (target <= neckline) continue;
+        if (target <= neckline * 1.01) continue;
 
         return {
           confirmIdx: rightIdx,
@@ -81,14 +83,30 @@ function findMostRecentPattern(bars: OhlcBar[]): PatternLevels | null {
 export function detectInverseHeadShoulders(
   bars: OhlcBar[],
   currentPrice: number | null,
-): PatternStatus {
-  if (bars.length < 15) return "None";
+  tf: BarTimeframe,
+): PatternEvalResult {
+  const params = getBullishParams(tf);
+  if (bars.length < params.minBarsBetween * 3 + params.swingWindow * 2) {
+    return { status: "None", confirmMsAgo: null };
+  }
 
   const price = resolveCurrentPrice(bars, currentPrice);
-  if (price == null) return "None";
+  if (price == null) return { status: "None", confirmMsAgo: null };
 
-  const pattern = findMostRecentPattern(bars);
-  if (!pattern) return "None";
+  const pattern = findMostRecentPattern(bars, tf);
+  if (!pattern) return { status: "None", confirmMsAgo: null };
 
-  return evaluatePatternStatus(bars, pattern, price);
+  return evaluateBullishPatternStatus(
+    bars,
+    pattern,
+    price,
+    params.maxRecencyBars,
+    {
+      allowForming: false,
+      minAboveNeckline: 1.02,
+      showTarget: false,
+      minBarsAfterConfirm: 5,
+      maxBarsAfterConfirm: tf === "4h" ? 30 : 40,
+    },
+  );
 }

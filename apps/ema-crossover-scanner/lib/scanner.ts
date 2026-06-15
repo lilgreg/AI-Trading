@@ -23,6 +23,7 @@ export async function scanSymbol(
   parsed: ParsedSymbol,
   historyDays: number,
   interval: ScanInterval,
+  includePatternDebug = false,
 ): Promise<StockScanResult> {
   const tvSymbol = resolveTradingViewSymbol(parsed);
   const displayTicker = tvSymbol.includes(":")
@@ -96,7 +97,7 @@ export async function scanSymbol(
       crossoverDaysAgo = Math.round(crossover.msAgo / (1000 * 60 * 60 * 24));
     }
 
-    const patterns = evaluateAllPatterns(hourly, bars4h, meta.price);
+    const patterns = evaluateAllPatterns(hourly, bars4h, meta.price, includePatternDebug);
 
     return {
       ...base,
@@ -121,14 +122,15 @@ export async function scanSymbols(
   symbols: ParsedSymbol[],
   historyDays: number,
   interval: ScanInterval,
+  includePatternDebug = false,
 ): Promise<StockScanResult[]> {
-  const batchSize = 10;
+  const batchSize = 8;
   const results: StockScanResult[] = [];
 
   for (let i = 0; i < symbols.length; i += batchSize) {
     const batch = symbols.slice(i, i + batchSize);
     const batchResults = await Promise.all(
-      batch.map((s) => scanSymbol(s, historyDays, interval)),
+      batch.map((s) => scanSymbol(s, historyDays, interval, includePatternDebug)),
     );
     results.push(...batchResults);
   }

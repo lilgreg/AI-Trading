@@ -4,6 +4,17 @@ import type { ScanInterval } from "./intervals";
 
 const yahooFinance = new YahooFinance();
 
+const YAHOO_TIMEOUT_MS = 15_000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => {
+      setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+    }),
+  ]);
+}
+
 /** Align bar timestamps to 4-hour buckets in America/New_York (TradingView-style). */
 export function aggregateHourlyTo4h(bars: OhlcBar[]): OhlcBar[] {
   const buckets = new Map<number, OhlcBar>();
@@ -110,11 +121,15 @@ export async function fetchHourlyBars(symbol: string, days: number): Promise<Ohl
   const start = new Date();
   start.setDate(start.getDate() - days - 14);
 
-  const chart = await yahooFinance.chart(symbol, {
-    period1: start,
-    period2: end,
-    interval: "1h",
-  });
+  const chart = await withTimeout(
+    yahooFinance.chart(symbol, {
+      period1: start,
+      period2: end,
+      interval: "1h",
+    }),
+    YAHOO_TIMEOUT_MS,
+    `Yahoo chart for ${symbol}`,
+  );
 
   return (chart.quotes ?? [])
     .filter((row) => row.date && row.close != null)
@@ -189,7 +204,11 @@ export async function fetchQuoteMeta(symbol: string): Promise<{
   quoteExchange: string | null;
 } & QuoteSessionChanges> {
   try {
-    const quote = await yahooFinance.quote(symbol);
+    const quote = await withTimeout(
+      yahooFinance.quote(symbol),
+      YAHOO_TIMEOUT_MS,
+      `Yahoo quote for ${symbol}`,
+    );
     const sessionChanges = computeSessionChanges(
       quote as unknown as Record<string, unknown>,
     );

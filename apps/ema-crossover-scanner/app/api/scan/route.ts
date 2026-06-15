@@ -20,6 +20,7 @@ export async function GET(request: NextRequest) {
   const tradingViewWatchlistUrl = searchParams.get("tvWatchlist");
   const includeBlueChips = searchParams.get("blueChips") !== "false";
   const onlyAbove = searchParams.get("onlyAbove") === "true";
+  const includeDebug = searchParams.get("debug") === "true";
   const historyDays = parseHistoryDays(searchParams.get("days"));
   const interval = parseScanInterval(searchParams.get("interval"));
 
@@ -37,7 +38,7 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  let results = await scanSymbols(symbols, historyDays, interval);
+  let results = await scanSymbols(symbols, historyDays, interval, includeDebug);
 
   if (onlyAbove) {
     results = results.filter((r) => r.ema20Above50 && !r.error);
