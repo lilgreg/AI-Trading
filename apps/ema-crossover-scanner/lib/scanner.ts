@@ -54,6 +54,7 @@ function isChartFetchError(result: StockScanResult): boolean {
     msg.includes("timeout") ||
     msg.includes("yahoo chart") ||
     msg.includes("yahoo v8") ||
+    msg.includes("all chart providers failed") ||
     msg.includes("429") ||
     msg.includes("rate") ||
     msg.includes("no hourly bar data") ||
@@ -68,6 +69,7 @@ export async function scanSymbol(
   parsed: ParsedSymbol,
   historyDays: number,
   includePatternDebug = false,
+  symbolIndex?: number,
 ): Promise<StockScanResult> {
   const tvSymbol = resolveTradingViewSymbol(parsed);
   const displayTicker = tvSymbol.includes(":")
@@ -110,7 +112,9 @@ export async function scanSymbol(
     let hourly: Awaited<ReturnType<typeof fetchHourlyBars>>["bars"];
     let dataSource: string | null = null;
     try {
-      const chartResult = await fetchHourlyBars(parsed.yahoo, historyDays);
+      const chartResult = await fetchHourlyBars(parsed.yahoo, historyDays, {
+        symbolIndex,
+      });
       hourly = chartResult.bars;
       dataSource = chartResult.source;
     } catch (chartErr) {
@@ -186,6 +190,7 @@ async function scanSymbolBatch(
   includePatternDebug: boolean,
   callbacks: ScanProgressCallbacks,
   options: ScanBatchOptions,
+  symbolIndexFor?: (parsed: ParsedSymbol) => number | undefined,
 ): Promise<StockScanResult[]> {
   const batchSize = options.batchSize ?? SCAN_BATCH_SIZE;
   const batchPauseMs = options.batchPauseMs ?? SCAN_BATCH_PAUSE_MS;
@@ -204,7 +209,14 @@ async function scanSymbolBatch(
 
     const batch = symbols.slice(i, i + batchSize);
     const batchResults = await Promise.all(
-      batch.map((s) => scanSymbol(s, historyDays, includePatternDebug)),
+      batch.map((s) =>
+        scanSymbol(
+          s,
+          historyDays,
+          includePatternDebug,
+          symbolIndexFor?.(s),
+        ),
+      ),
     );
     for (const result of batchResults) {
       results.push(result);
@@ -220,6 +232,7 @@ export async function scanSymbols(
   historyDays: number,
   includePatternDebug = false,
   callbacks: ScanProgressCallbacks = {},
+  symbolIndexFor?: (parsed: ParsedSymbol) => number | undefined,
 ): Promise<StockScanResult[]> {
   const results = await scanSymbolBatch(
     symbols,
@@ -227,6 +240,7 @@ export async function scanSymbols(
     includePatternDebug,
     callbacks,
     {},
+    symbolIndexFor,
   );
 
   const failedIndexes = results
@@ -250,6 +264,10 @@ export async function scanSymbols(
       batchPauseMs: 2_000,
       groupSize: 20,
       groupPauseMs: 5_000,
+    },
+    (parsed) => {
+      const batchIndex = symbols.findIndex((s) => s.yahoo === parsed.yahoo);
+      return batchIndex >= 0 ? symbolIndexFor?.(symbols[batchIndex]) : undefined;
     },
   );
 

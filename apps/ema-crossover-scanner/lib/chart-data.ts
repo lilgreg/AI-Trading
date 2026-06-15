@@ -31,6 +31,16 @@ export interface HourlyBarsResult {
   source: string;
 }
 
+export interface FetchHourlyBarsOptions {
+  /** Universe index — symbols >= tail threshold skip slow yahoo-finance2. */
+  symbolIndex?: number;
+}
+
+/** Symbols at/after this index skip yahoo-finance2 (often throttled after ~120). */
+export const CHART_TAIL_SYMBOL_INDEX = Number(
+  process.env.CHART_TAIL_SYMBOL_INDEX ?? 120,
+);
+
 type ChartProvider = {
   name: string;
   enabled?: () => boolean;
@@ -48,8 +58,12 @@ function skipSlowYahooProviders(): boolean {
   );
 }
 
-function yahooProviders(): ChartProvider[] {
+function yahooProviders(options: FetchHourlyBarsOptions = {}): ChartProvider[] {
   if (skipYahooProviders()) return [];
+
+  const tailSymbol =
+    options.symbolIndex != null && options.symbolIndex >= CHART_TAIL_SYMBOL_INDEX;
+  const skipSlow = skipSlowYahooProviders() || tailSymbol;
 
   const providers: ChartProvider[] = [
     {
@@ -69,7 +83,7 @@ function yahooProviders(): ChartProvider[] {
     },
   ];
 
-  if (!skipSlowYahooProviders()) {
+  if (!skipSlow) {
     providers.push(
       {
         name: "yahoo-finance2",
@@ -120,8 +134,8 @@ function backupProviders(): ChartProvider[] {
   ];
 }
 
-function allProviders(): ChartProvider[] {
-  return [...yahooProviders(), ...backupProviders()];
+function allProviders(options: FetchHourlyBarsOptions = {}): ChartProvider[] {
+  return [...yahooProviders(options), ...backupProviders()];
 }
 
 function logMissingFinnhubHint(errors: string[]): void {
@@ -140,15 +154,18 @@ function logMissingFinnhubHint(errors: string[]): void {
 export async function fetchHourlyBars(
   symbol: string,
   days: number,
+  options: FetchHourlyBarsOptions = {},
 ): Promise<HourlyBarsResult> {
   const cached = getCachedHourlyBars(symbol, days);
   if (cached) return cached;
 
   const errors: string[] = [];
+  const tried: string[] = [];
 
-  for (const provider of allProviders()) {
+  for (const provider of allProviders(options)) {
     if (provider.enabled && !provider.enabled()) continue;
 
+    tried.push(provider.name);
     try {
       const bars = await provider.fetch(symbol, days);
       if (bars.length === 0) {
@@ -166,16 +183,17 @@ export async function fetchHourlyBars(
 
   logMissingFinnhubHint(errors);
 
+  const providerList = tried.length > 0 ? tried.join(", ") : "none";
   throw new Error(
     errors.length > 0
-      ? `No hourly bar data for ${symbol} (${errors.join("; ")})`
-      : `No hourly bar data for ${symbol}`,
+      ? `All chart providers failed for ${symbol} (${providerList}): ${errors.join("; ")}`
+      : `All chart providers failed for ${symbol} (${providerList})`,
   );
 }
 
 /** List configured provider names (for diagnostics). */
-export function listChartProviders(): string[] {
-  return allProviders()
+export function listChartProviders(options: FetchHourlyBarsOptions = {}): string[] {
+  return allProviders(options)
     .filter((p) => !p.enabled || p.enabled())
     .map((p) => p.name);
 }

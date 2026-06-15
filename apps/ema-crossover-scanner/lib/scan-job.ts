@@ -242,16 +242,25 @@ async function mergeScanResults(
   };
 
   if (toScan.length > 0) {
-    await scanSymbols(toScan, config.historyDays, false, {
-      onResult: async (result) => {
-        resultsBySymbol.set(result.symbol, result);
-        completedSinceSave += 1;
-        if (completedSinceSave >= PARTIAL_SAVE_EVERY) {
-          completedSinceSave = 0;
-          await persistPartial(false);
-        }
+    const symbolIndexByYahoo = new Map(
+      symbols.map((parsed, index) => [parsed.yahoo, index]),
+    );
+    await scanSymbols(
+      toScan,
+      config.historyDays,
+      false,
+      {
+        onResult: async (result) => {
+          resultsBySymbol.set(result.symbol, result);
+          completedSinceSave += 1;
+          if (completedSinceSave >= PARTIAL_SAVE_EVERY) {
+            completedSinceSave = 0;
+            await persistPartial(false);
+          }
+        },
       },
-    });
+      (parsed) => symbolIndexByYahoo.get(parsed.yahoo),
+    );
   }
 
   const scanComplete = isScanFullyAttempted(symbols, resultsBySymbol, fallbackBySymbol);

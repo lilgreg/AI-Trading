@@ -11,9 +11,17 @@ import { retryWithBackoff, sleep, yahooLimiter } from "./request-limit";
 
 const yahooFinance = new YahooFinance({ suppressNotices: ["yahooSurvey"] });
 
-export const YAHOO_TIMEOUT_MS = Number(process.env.YAHOO_TIMEOUT_MS ?? 20_000);
-export const YAHOO_RETRY_TIMEOUT_MS = Number(
-  process.env.YAHOO_RETRY_TIMEOUT_MS ?? 30_000,
+function parseTimeoutMs(raw: string | undefined, fallback: number, min: number): number {
+  const parsed = Number(raw ?? fallback);
+  if (!Number.isFinite(parsed) || parsed < min) return fallback;
+  return parsed;
+}
+
+export const YAHOO_TIMEOUT_MS = parseTimeoutMs(process.env.YAHOO_TIMEOUT_MS, 20_000, 20_000);
+export const YAHOO_RETRY_TIMEOUT_MS = parseTimeoutMs(
+  process.env.YAHOO_RETRY_TIMEOUT_MS,
+  30_000,
+  20_000,
 );
 
 const YAHOO_USER_AGENTS = [

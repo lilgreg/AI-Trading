@@ -83,11 +83,7 @@ export function filterSessionChangesForMarket(
     case "afterHours":
       return changes;
     case "closed":
-      // Overnight / weekend: keep last regular + after-hours for daily % display.
-      return {
-        preMarketChange: null,
-        regularMarketChange: changes.regularMarketChange,
-        postMarketChange: changes.postMarketChange,
-      };
+      // Overnight (8pm–4am) / weekend: show completed day's Pre + Reg + AH.
+      return changes;
   }
 }

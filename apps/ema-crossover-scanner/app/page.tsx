@@ -74,16 +74,9 @@ function SessionChangesCell({ row }: { row: StockScanResult }) {
     { label: "AH", value: filtered.postMarketChange },
   ] as const;
 
-  const hasAny = rows.some((r) => r.value != null);
-  if (!hasAny) {
-    return <span className="text-[var(--muted)]">—</span>;
-  }
-
-  const visible = rows.filter((r) => r.value != null);
-
   return (
     <div className="space-y-0.5 text-sm leading-snug">
-      {visible.map(({ label, value }) => (
+      {rows.map(({ label, value }) => (
         <div key={label} className="flex items-baseline gap-2">
           <span className="w-8 shrink-0 text-[var(--muted)]">{label}</span>
           <span className={`mono text-base ${changeColorClass(value)}`}>
@@ -242,6 +235,7 @@ const STATUS_POLL_MS = 60_000;
 const QUOTES_POLL_MS = 45_000;
 const RETRY_FAILED_THRESHOLD = 10;
 const RETRY_POLL_MS = 45_000;
+const TAIL_SYMBOL_START = 120;
 const NEWS_POLL_MS = Number(process.env.NEXT_PUBLIC_NEWS_POLL_MS ?? 20_000);
 const SCAN_POLL_MS = 30_000;
 const NEWS_POLL_LABEL_SEC = Math.round(NEWS_POLL_MS / 1000);
@@ -410,7 +404,10 @@ export default function HomePage() {
       );
       setData(json);
 
-      if ((json.results?.filter((r) => r.error).length ?? 0) <= RETRY_FAILED_THRESHOLD) {
+      const errors = json.results?.filter((r) => r.error).length ?? 0;
+      const tailErrors =
+        json.results?.slice(TAIL_SYMBOL_START).filter((r) => r.error).length ?? 0;
+      if (errors <= RETRY_FAILED_THRESHOLD && tailErrors === 0) {
         setRetryingFailed(false);
       }
     } catch {
@@ -582,10 +579,18 @@ export default function HomePage() {
     [data?.results],
   );
 
+  const tailErrorCount = useMemo(
+    () => data?.results?.slice(TAIL_SYMBOL_START).filter((r) => r.error).length ?? 0,
+    [data?.results],
+  );
+
+  const shouldRetryFailed =
+    errorCount > RETRY_FAILED_THRESHOLD || tailErrorCount > 0;
+
   useEffect(() => {
     if (retryPollRef.current) clearInterval(retryPollRef.current);
     if (!data || data.cacheEmpty || data.scanInProgress) return;
-    if (errorCount <= RETRY_FAILED_THRESHOLD) {
+    if (!shouldRetryFailed) {
       setRetryingFailed(false);
       return;
     }
@@ -599,7 +604,7 @@ export default function HomePage() {
     return () => {
       if (retryPollRef.current) clearInterval(retryPollRef.current);
     };
-  }, [data?.cacheEmpty, data?.scanInProgress, errorCount, retryFailedScan]);
+  }, [data?.cacheEmpty, data?.scanInProgress, shouldRetryFailed, retryFailedScan]);
 
   useLayoutEffect(() => {
     const el = newsBarRef.current;
@@ -807,7 +812,10 @@ export default function HomePage() {
           )}
           {retryingFailed && !data?.scanInProgress && (
             <span className="ml-2 text-[var(--accent)]">
-              · Retrying failed symbols…
+              ·{" "}
+              {tailErrorCount > 0
+                ? `Fixing symbols ${TAIL_SYMBOL_START + 1}+… (${tailErrorCount} failed)`
+                : "Retrying failed symbols…"}
             </span>
           )}
           {quotesLive && !data?.cacheEmpty && (

@@ -9,6 +9,13 @@ export interface QuoteUpdate {
   postMarketChange: number | null;
 }
 
+function mergeSessionChange(
+  incoming: number | null,
+  existing: number | null,
+): number | null {
+  return incoming ?? existing;
+}
+
 export function applyQuoteUpdates(
   results: StockScanResult[],
   updates: QuoteUpdate[],
@@ -20,11 +27,19 @@ export function applyQuoteUpdates(
     return {
       ...row,
       price: quote.price ?? row.price,
-      // Always take session fields from live quotes — null means "not active today"
-      // and must not fall back to stale scan-cache regular/after-hours values.
-      preMarketChange: quote.preMarketChange,
-      regularMarketChange: quote.regularMarketChange,
-      postMarketChange: quote.postMarketChange,
+      // Never wipe scan-cache session % when a quote poll returns null (throttle/error).
+      preMarketChange: mergeSessionChange(
+        quote.preMarketChange,
+        row.preMarketChange,
+      ),
+      regularMarketChange: mergeSessionChange(
+        quote.regularMarketChange,
+        row.regularMarketChange,
+      ),
+      postMarketChange: mergeSessionChange(
+        quote.postMarketChange,
+        row.postMarketChange,
+      ),
     };
   });
 }
