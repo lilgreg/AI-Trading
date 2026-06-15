@@ -69,7 +69,7 @@ export async function scanSymbols(
   symbols: ParsedSymbol[],
   historyDays: number,
 ): Promise<StockScanResult[]> {
-  const batchSize = 5;
+  const batchSize = 10;
   const results: StockScanResult[] = [];
 
   for (let i = 0; i < symbols.length; i += batchSize) {

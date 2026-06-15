@@ -4,5 +4,10 @@
   "devCommand": "npm run dev",
   "installCommand": "npm install",
   "framework": "nextjs",
-  "outputDirectory": ".next"
+  "outputDirectory": ".next",
+  "functions": {
+    "app/api/scan/route.ts": {
+      "maxDuration": 300
+    }
+  }
 }

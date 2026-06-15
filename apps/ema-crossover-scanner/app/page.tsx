@@ -40,6 +40,9 @@ function CrossoverCell({ row }: { row: StockScanResult }) {
   );
 }
 
+const DEFAULT_TV_WATCHLIST =
+  "https://www.tradingview.com/watchlists/156233778/";
+
 export default function HomePage() {
   const [data, setData] = useState<ScanResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -47,6 +50,7 @@ export default function HomePage() {
   const [includeBlueChips, setIncludeBlueChips] = useState(true);
   const [onlyAbove, setOnlyAbove] = useState(false);
   const [watchlist, setWatchlist] = useState("");
+  const [tvWatchlistUrl, setTvWatchlistUrl] = useState(DEFAULT_TV_WATCHLIST);
 
   const runScan = useCallback(async () => {
     setLoading(true);
@@ -57,6 +61,7 @@ export default function HomePage() {
       if (!includeBlueChips) params.set("blueChips", "false");
       if (onlyAbove) params.set("onlyAbove", "true");
       if (watchlist.trim()) params.set("watchlist", watchlist.trim());
+      if (tvWatchlistUrl.trim()) params.set("tvWatchlist", tvWatchlistUrl.trim());
 
       const res = await fetch(`/api/scan?${params.toString()}`);
       if (!res.ok) {
@@ -71,7 +76,7 @@ export default function HomePage() {
     } finally {
       setLoading(false);
     }
-  }, [includeBlueChips, onlyAbove, watchlist]);
+  }, [includeBlueChips, onlyAbove, watchlist, tvWatchlistUrl]);
 
   useEffect(() => {
     void runScan();
@@ -102,7 +107,7 @@ export default function HomePage() {
         </h1>
         <p className="mt-2 max-w-2xl text-[var(--muted)]">
           Stocks ranked by how recently the 20-day EMA crossed above the 50-day EMA.
-          Uses your TradingView watchlist export plus a default blue-chip universe.
+          Merges your shared TradingView watchlist with blue-chip defaults (overlaps deduped).
         </p>
       </header>
 
@@ -110,7 +115,16 @@ export default function HomePage() {
         <div className="grid gap-4 lg:grid-cols-[1fr_auto] lg:items-end">
           <div className="space-y-3">
             <label className="block text-sm text-[var(--muted)]">
-              TradingView watchlist (paste symbols or upload .txt export)
+              TradingView shared watchlist link
+            </label>
+            <input
+              className="input font-mono text-xs"
+              placeholder="https://www.tradingview.com/watchlists/156233778/"
+              value={tvWatchlistUrl}
+              onChange={(e) => setTvWatchlistUrl(e.target.value)}
+            />
+            <label className="block text-sm text-[var(--muted)]">
+              Extra symbols (paste or upload .txt export)
             </label>
             <textarea
               className="input min-h-[88px] font-mono text-xs"
@@ -178,6 +192,11 @@ export default function HomePage() {
           <span className="text-[var(--muted)]">Recent crosses</span>{" "}
           <span className="font-semibold">{stats.withCross}</span>
         </div>
+        {data?.tradingViewWatchlistName && (
+          <div className="card px-4 py-2 text-[var(--muted)]">
+            TV list: <span className="text-[var(--text)]">{data.tradingViewWatchlistName}</span>
+          </div>
+        )}
         {data?.scannedAt && (
           <div className="card px-4 py-2 text-[var(--muted)]">
             Updated {new Date(data.scannedAt).toLocaleString()}

@@ -4,7 +4,7 @@ import { buildSymbolUniverse } from "@/lib/symbols";
 import type { ScanResponse } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 function parseHistoryDays(value: string | null): number {
   const parsed = Number(value ?? process.env.HISTORY_DAYS ?? 120);
@@ -16,14 +16,16 @@ export async function GET(request: NextRequest) {
   const { searchParams } = request.nextUrl;
   const customSymbols = searchParams.get("symbols");
   const watchlistText = searchParams.get("watchlist");
+  const tradingViewWatchlistUrl = searchParams.get("tvWatchlist");
   const includeBlueChips = searchParams.get("blueChips") !== "false";
   const onlyAbove = searchParams.get("onlyAbove") === "true";
   const historyDays = parseHistoryDays(searchParams.get("days"));
 
-  const { symbols, sources } = buildSymbolUniverse({
+  const { symbols, sources, tradingViewWatchlistName } = await buildSymbolUniverse({
     includeBlueChips,
     watchlistText,
     customSymbols,
+    tradingViewWatchlistUrl,
   });
 
   if (symbols.length === 0) {
@@ -44,6 +46,7 @@ export async function GET(request: NextRequest) {
     symbolCount: results.length,
     results,
     sources,
+    tradingViewWatchlistName,
   };
 
   return NextResponse.json(response);
@@ -52,6 +55,7 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   let body: {
     watchlist?: string;
+    tvWatchlist?: string;
     symbols?: string;
     blueChips?: boolean;
     onlyAbove?: boolean;
@@ -67,6 +71,7 @@ export async function POST(request: NextRequest) {
   const params = new URLSearchParams();
   if (body.symbols) params.set("symbols", body.symbols);
   if (body.watchlist) params.set("watchlist", body.watchlist);
+  if (body.tvWatchlist) params.set("tvWatchlist", body.tvWatchlist);
   if (body.blueChips === false) params.set("blueChips", "false");
   if (body.onlyAbove) params.set("onlyAbove", "true");
   if (body.days) params.set("days", String(body.days));

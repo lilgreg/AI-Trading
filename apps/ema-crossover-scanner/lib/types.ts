@@ -21,7 +21,9 @@ export interface ScanResponse {
     blueChips: boolean;
     watchlist: boolean;
     custom: boolean;
+    tradingViewWatchlist: boolean;
   };
+  tradingViewWatchlistName?: string;
 }
 
 export interface ParsedSymbol {
