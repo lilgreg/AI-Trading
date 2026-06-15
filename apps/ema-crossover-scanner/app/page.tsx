@@ -8,6 +8,7 @@ import {
   normalizePatterns,
 } from "@/lib/normalize-scan-result";
 import { patternSortKey } from "@/lib/pattern-sort";
+import { StockLogo } from "@/components/stock-logo";
 import type { CachedScanResponse, CrossoverDisplay, PatternDetection } from "@/lib/types";
 import type { StockScanResult } from "@/lib/types";
 
@@ -444,7 +445,7 @@ export default function HomePage() {
             {formatCacheAge(data?.scannedAt ?? null)}
           </span>
           {data?.stale && !data.scanInProgress && (
-            <span className="ml-2 text-amber-400">stale</span>
+            <span className="ml-2 text-[var(--amber)]">stale</span>
           )}
           {data?.scanInProgress && (
             <span className="ml-2 text-[var(--accent)]">updating…</span>
@@ -458,7 +459,7 @@ export default function HomePage() {
             <thead>
               <tr>
                 <th>#</th>
-                <th>Symbol</th>
+                <th colSpan={2}>Symbol</th>
                 <th>Name</th>
                 <th>Price</th>
                 <th
@@ -497,72 +498,83 @@ export default function HomePage() {
             <tbody>
               {loading && !data ? (
                 <tr>
-                  <td colSpan={11} className="py-12 text-center text-[var(--muted)]">
+                  <td colSpan={12} className="py-12 text-center text-[var(--muted)]">
                     Loading cached scan…
                   </td>
                 </tr>
               ) : showEmptyState ? (
                 <tr>
-                  <td colSpan={11} className="py-12 text-center text-[var(--muted)]">
+                  <td colSpan={12} className="py-12 text-center text-[var(--muted)]">
                     No cached scan yet — background scan started. This page will
                     update automatically.
                   </td>
                 </tr>
               ) : sortedResults.length === 0 ? (
                 <tr>
-                  <td colSpan={11} className="py-12 text-center text-[var(--muted)]">
+                  <td colSpan={12} className="py-12 text-center text-[var(--muted)]">
                     No results match filters.
                   </td>
                 </tr>
               ) : (
-                sortedResults.map((row, index) => (
-                  <tr key={row.symbol}>
-                    <td className="text-[var(--muted)]">{index + 1}</td>
-                    <td className="mono text-base font-semibold">
-                      <a
-                        href={row.tradingViewUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-[var(--accent)] hover:underline"
-                      >
-                        {row.displayTicker}
-                      </a>
-                    </td>
-                    <td className="max-w-[220px] truncate text-[var(--muted)]">
-                      {row.name ?? "—"}
-                    </td>
-                    <td className="mono">{formatPrice(row.price)}</td>
-                    <td>
-                      <SessionChangesCell row={row} />
-                    </td>
-                    <td>
-                      <PatternsCell patterns={row.patterns} />
-                    </td>
-                    <td className="mono">{formatEma(row.ema20)}</td>
-                    <td className="mono">{formatEma(row.ema50)}</td>
-                    <td>
-                      {row.error ? (
-                        <span className="badge-muted inline-block rounded-full px-2 py-0.5 text-xs">
-                          Error
-                        </span>
-                      ) : row.ema20Above50 ? (
-                        <span className="badge-green inline-block rounded-full px-2 py-0.5 text-xs">
-                          20 &gt; 50
-                        </span>
-                      ) : (
-                        <span className="badge-red inline-block rounded-full px-2 py-0.5 text-xs">
-                          20 ≤ 50
-                        </span>
-                      )}
-                    </td>
-                    <td>
-                      <CrossoverCell cross={row.cross4h} error={row.error} />
-                    </td>
-                    <td>
-                      <CrossoverCell cross={row.cross1h} error={row.error} />
-                    </td>
-                  </tr>
-                ))
+                sortedResults.map((row, index) => {
+                  const cross4h = row.cross4h ?? undefined;
+                  const cross1h = row.cross1h ?? undefined;
+                  const chartUrl = row.tradingViewUrl ?? "#";
+                  const ticker = row.displayTicker ?? row.symbol ?? "—";
+
+                  return (
+                    <tr key={row.symbol}>
+                      <td className="text-[var(--muted)]">{index + 1}</td>
+                      <td className="mono py-0 text-base font-semibold" colSpan={2}>
+                        <a
+                          href={chartUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="symbol-link py-3.5"
+                        >
+                          <StockLogo
+                            displayTicker={ticker}
+                            tradingViewSymbol={row.tradingViewSymbol}
+                          />
+                          <span>{ticker}</span>
+                        </a>
+                      </td>
+                      <td className="max-w-[220px] truncate text-[var(--muted)]">
+                        {row.name ?? "—"}
+                      </td>
+                      <td className="mono">{formatPrice(row.price)}</td>
+                      <td>
+                        <SessionChangesCell row={row} />
+                      </td>
+                      <td>
+                        <PatternsCell patterns={row.patterns} />
+                      </td>
+                      <td className="mono">{formatEma(row.ema20)}</td>
+                      <td className="mono">{formatEma(row.ema50)}</td>
+                      <td>
+                        {row.error ? (
+                          <span className="badge-muted inline-block rounded-full px-2 py-0.5 text-xs">
+                            Error
+                          </span>
+                        ) : row.ema20Above50 ? (
+                          <span className="badge-green inline-block rounded-full px-2 py-0.5 text-xs">
+                            20 &gt; 50
+                          </span>
+                        ) : (
+                          <span className="badge-red inline-block rounded-full px-2 py-0.5 text-xs">
+                            20 ≤ 50
+                          </span>
+                        )}
+                      </td>
+                      <td>
+                        <CrossoverCell cross={cross4h} error={row.error} />
+                      </td>
+                      <td>
+                        <CrossoverCell cross={cross1h} error={row.error} />
+                      </td>
+                    </tr>
+                  );
+                })
               )}
             </tbody>
           </table>

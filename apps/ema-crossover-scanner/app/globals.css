@@ -1,16 +1,16 @@
 @import "tailwindcss";
 
 :root {
-  --bg: #0b0f14;
-  --surface: #121820;
-  --surface-2: #1a2230;
-  --border: #2a3548;
-  --text: #e8edf5;
-  --muted: #8b9bb4;
-  --accent: #3b82f6;
-  --green: #22c55e;
-  --red: #ef4444;
-  --amber: #f59e0b;
+  --bg: #f6f8fb;
+  --surface: #ffffff;
+  --surface-2: #f1f4f9;
+  --border: #e1e6ef;
+  --text: #131722;
+  --muted: #787b86;
+  --accent: #2962ff;
+  --green: #089981;
+  --red: #f23645;
+  --amber: #ff9800;
 }
 
 body {
@@ -138,4 +138,28 @@ table.scan-table tbody tr:hover {
 
 .mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.stock-logo,
+.stock-logo-placeholder {
+  flex-shrink: 0;
+}
+
+@media (max-width: 480px) {
+  .stock-logo,
+  .stock-logo-placeholder {
+    display: none;
+  }
+}
+
+.symbol-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.625rem;
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.symbol-link:hover {
+  text-decoration: underline;
 }
