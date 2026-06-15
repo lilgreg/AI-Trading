@@ -1,14 +1,18 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { formatMsAgo } from "@/lib/ema";
+import { computeDailyChange } from "@/lib/daily-change";
+import {
+  filterSessionChangesForMarket,
+} from "@/lib/market-session";
 import {
   normalizeCachedResponse,
   normalizeCrossover,
   normalizePatterns,
 } from "@/lib/normalize-scan-result";
 import { patternSortKey } from "@/lib/pattern-sort";
-import { applyQuoteUpdates } from "@/lib/quote-updates";
+import { applyQuoteUpdates, dailyChangeByQuoteUpdates } from "@/lib/quote-updates";
 import { StockLogo } from "@/components/stock-logo";
 import type {
   CachedScanResponse,
@@ -55,10 +59,16 @@ function formatScanDataAge(scannedAt: string | null): string {
 }
 
 function SessionChangesCell({ row }: { row: StockScanResult }) {
+  const filtered = filterSessionChangesForMarket({
+    preMarketChange: row.preMarketChange,
+    regularMarketChange: row.regularMarketChange,
+    postMarketChange: row.postMarketChange,
+  });
+
   const rows = [
-    { label: "Pre", value: row.preMarketChange },
-    { label: "Reg", value: row.regularMarketChange },
-    { label: "AH", value: row.postMarketChange },
+    { label: "Pre", value: filtered.preMarketChange },
+    { label: "Reg", value: filtered.regularMarketChange },
+    { label: "AH", value: filtered.postMarketChange },
   ] as const;
 
   const hasAny = rows.some((r) => r.value != null);
@@ -236,12 +246,88 @@ function newsHeadlineId(item: NewsHeadline): string {
 interface NewsHeadline {
   symbol: string;
   displayTicker: string;
+  dailyChange: number | null;
   headline: string;
   publisher: string;
   url: string;
   publishedAt: string;
   msAgo: number;
   timeAgo: string;
+}
+
+function ScanTableColgroup() {
+  return (
+    <colgroup>
+      <col style={{ width: "36px" }} />
+      <col style={{ width: "42px" }} />
+      <col style={{ width: "88px" }} />
+      <col style={{ width: "200px" }} />
+      <col style={{ width: "92px" }} />
+      <col style={{ width: "118px" }} />
+      <col style={{ width: "138px" }} />
+      <col style={{ width: "88px" }} />
+      <col style={{ width: "88px" }} />
+      <col style={{ width: "96px" }} />
+      <col style={{ width: "118px" }} />
+      <col style={{ width: "118px" }} />
+    </colgroup>
+  );
+}
+
+function ScanTableHeaderRow({
+  sortKey,
+  sortDir,
+  onSort,
+}: {
+  sortKey: SortKey;
+  sortDir: SortDir;
+  onSort: (key: SortKey) => void;
+}) {
+  return (
+    <tr>
+      <th scope="col">#</th>
+      <th scope="col" colSpan={2}>
+        Symbol
+      </th>
+      <th scope="col">Name</th>
+      <th scope="col">Price</th>
+      <th
+        scope="col"
+        className="sortable"
+        onClick={() => onSort("session")}
+        aria-sort={ariaSortValue("session", sortKey, sortDir)}
+      >
+        Session Δ{sortIndicator(sortKey === "session", sortDir)}
+      </th>
+      <th
+        scope="col"
+        className="sortable"
+        onClick={() => onSort("patterns")}
+        aria-sort={ariaSortValue("patterns", sortKey, sortDir)}
+      >
+        Patterns{sortIndicator(sortKey === "patterns", sortDir)}
+      </th>
+      <th scope="col">20 EMA (4h)</th>
+      <th scope="col">50 EMA (4h)</th>
+      <th scope="col">Status (4h)</th>
+      <th
+        scope="col"
+        className="sortable"
+        onClick={() => onSort("cross4h")}
+        aria-sort={ariaSortValue("cross4h", sortKey, sortDir)}
+      >
+        Cross 4h{sortIndicator(sortKey === "cross4h", sortDir)}
+      </th>
+      <th
+        scope="col"
+        className="sortable"
+        onClick={() => onSort("cross1h")}
+        aria-sort={ariaSortValue("cross1h", sortKey, sortDir)}
+      >
+        Cross 1h{sortIndicator(sortKey === "cross1h", sortDir)}
+      </th>
+    </tr>
+  );
 }
 
 export default function HomePage() {
@@ -253,6 +339,9 @@ export default function HomePage() {
   const [sortKey, setSortKey] = useState<SortKey>("cross4h");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
   const [quotesLive, setQuotesLive] = useState(false);
+  const [quoteDailyBySymbol, setQuoteDailyBySymbol] = useState<
+    Map<string, number | null>
+  >(() => new Map());
   const [newsHeadlines, setNewsHeadlines] = useState<NewsHeadline[]>([]);
   const [newsSymbolCount, setNewsSymbolCount] = useState(0);
   const [newsLoading, setNewsLoading] = useState(false);
@@ -380,6 +469,7 @@ export default function HomePage() {
         quotes?: Array<{
           symbol: string;
           price: number | null;
+          dailyChange: number | null;
           preMarketChange: number | null;
           regularMarketChange: number | null;
           postMarketChange: number | null;
@@ -389,6 +479,7 @@ export default function HomePage() {
       if (!body.quotes?.length) return;
 
       setQuotesLive(true);
+      setQuoteDailyBySymbol(dailyChangeByQuoteUpdates(body.quotes));
       setData((prev) => {
         if (!prev?.results?.length) return prev;
         return {
@@ -460,7 +551,7 @@ export default function HomePage() {
     };
   }, [data?.scanInProgress, fetchCache]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const el = newsBarRef.current;
     if (!el) return;
 
@@ -508,8 +599,22 @@ export default function HomePage() {
       let cmp = 0;
 
       if (sortKey === "session") {
-        const aVal = a.regularMarketChange;
-        const bVal = b.regularMarketChange;
+        const sessionVal = (row: StockScanResult) => {
+          const fromQuote = quoteDailyBySymbol.get(row.symbol);
+          if (fromQuote != null) return fromQuote;
+          const filtered = filterSessionChangesForMarket({
+            preMarketChange: row.preMarketChange,
+            regularMarketChange: row.regularMarketChange,
+            postMarketChange: row.postMarketChange,
+          });
+          return computeDailyChange(
+            filtered.preMarketChange,
+            filtered.regularMarketChange,
+            filtered.postMarketChange,
+          );
+        };
+        const aVal = sessionVal(a);
+        const bVal = sessionVal(b);
         if (aVal == null && bVal == null) cmp = 0;
         else if (aVal == null) cmp = 1;
         else if (bVal == null) cmp = -1;
@@ -536,7 +641,32 @@ export default function HomePage() {
     });
 
     return rows;
-  }, [filteredResults, sortKey, sortDir]);
+  }, [filteredResults, sortKey, sortDir, quoteDailyBySymbol]);
+
+  const dailyChangeBySymbol = useMemo(() => {
+    const map = new Map<string, number | null>();
+    for (const row of data?.results ?? []) {
+      const fromQuote = quoteDailyBySymbol.get(row.symbol);
+      if (fromQuote != null) {
+        map.set(row.symbol, fromQuote);
+        continue;
+      }
+      const filtered = filterSessionChangesForMarket({
+        preMarketChange: row.preMarketChange,
+        regularMarketChange: row.regularMarketChange,
+        postMarketChange: row.postMarketChange,
+      });
+      map.set(
+        row.symbol,
+        computeDailyChange(
+          filtered.preMarketChange,
+          filtered.regularMarketChange,
+          filtered.postMarketChange,
+        ),
+      );
+    }
+    return map;
+  }, [data?.results, quoteDailyBySymbol]);
 
   const stats = useMemo(() => {
     const rows = filteredResults;
@@ -667,6 +797,8 @@ export default function HomePage() {
             {newsHeadlines.map((item) => {
               const headlineId = newsHeadlineId(item);
               const isNew = glowingNewsIds.has(headlineId);
+              const dailyChange =
+                dailyChangeBySymbol.get(item.symbol) ?? item.dailyChange;
 
               return (
                 <a
@@ -676,7 +808,16 @@ export default function HomePage() {
                   rel="noopener noreferrer"
                   className={`news-chip${isNew ? " news-chip-new" : ""}`}
                 >
-                  <div className="news-chip-ticker">{item.displayTicker}</div>
+                  <div className="news-chip-ticker">
+                    <span>{item.displayTicker}</span>
+                    {dailyChange != null && (
+                      <span
+                        className={`news-chip-change ${changeColorClass(dailyChange)}`}
+                      >
+                        {formatSessionChange(dailyChange)}
+                      </span>
+                    )}
+                  </div>
                   <div className="news-chip-headline">{item.headline}</div>
                   <div className="news-chip-meta">
                     {item.timeAgo} · {item.publisher}
@@ -694,47 +835,29 @@ export default function HomePage() {
       </section>
 
       <section className="card">
-        <table className="scan-table">
-          <thead className="scan-table-head">
-            <tr>
-              <th>#</th>
-              <th colSpan={2}>Symbol</th>
-              <th>Name</th>
-              <th>Price</th>
-              <th
-                className="sortable"
-                onClick={() => handleSort("session")}
-                aria-sort={ariaSortValue("session", sortKey, sortDir)}
-              >
-                Session Δ{sortIndicator(sortKey === "session", sortDir)}
-              </th>
-              <th
-                className="sortable"
-                onClick={() => handleSort("patterns")}
-                aria-sort={ariaSortValue("patterns", sortKey, sortDir)}
-              >
-                Patterns{sortIndicator(sortKey === "patterns", sortDir)}
-              </th>
-              <th>20 EMA (4h)</th>
-              <th>50 EMA (4h)</th>
-              <th>Status (4h)</th>
-              <th
-                className="sortable"
-                onClick={() => handleSort("cross4h")}
-                aria-sort={ariaSortValue("cross4h", sortKey, sortDir)}
-              >
-                Cross 4h{sortIndicator(sortKey === "cross4h", sortDir)}
-              </th>
-              <th
-                className="sortable"
-                onClick={() => handleSort("cross1h")}
-                aria-sort={ariaSortValue("cross1h", sortKey, sortDir)}
-              >
-                Cross 1h{sortIndicator(sortKey === "cross1h", sortDir)}
-              </th>
-            </tr>
-          </thead>
-          <tbody>
+        <div className="scan-table-xscroll">
+          <div className="scan-table-sticky-head">
+            <table className="scan-table">
+              <ScanTableColgroup />
+              <thead>
+                <ScanTableHeaderRow
+                  sortKey={sortKey}
+                  sortDir={sortDir}
+                  onSort={handleSort}
+                />
+              </thead>
+            </table>
+          </div>
+          <table className="scan-table">
+            <ScanTableColgroup />
+            <thead className="sr-only">
+              <ScanTableHeaderRow
+                sortKey={sortKey}
+                sortDir={sortDir}
+                onSort={handleSort}
+              />
+            </thead>
+            <tbody>
               {loading && !data ? (
                 <tr>
                   <td colSpan={12} className="py-12 text-center text-[var(--muted)]">
@@ -775,6 +898,7 @@ export default function HomePage() {
                             displayTicker={ticker}
                             tradingViewSymbol={row.tradingViewSymbol}
                             yahooSymbol={row.symbol}
+                            companyName={row.name}
                             logoUrl={row.logoUrl}
                           />
                           <span>{ticker}</span>
@@ -819,6 +943,7 @@ export default function HomePage() {
               )}
             </tbody>
           </table>
+        </div>
       </section>
 
       <footer className="mt-8 text-xs text-[var(--muted)]">

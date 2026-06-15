@@ -3,6 +3,7 @@ import type { StockScanResult } from "./types";
 export interface QuoteUpdate {
   symbol: string;
   price: number | null;
+  dailyChange: number | null;
   preMarketChange: number | null;
   regularMarketChange: number | null;
   postMarketChange: number | null;
@@ -24,4 +25,11 @@ export function applyQuoteUpdates(
       postMarketChange: quote.postMarketChange ?? row.postMarketChange,
     };
   });
+}
+
+/** Daily % by symbol from live quote poll. */
+export function dailyChangeByQuoteUpdates(
+  updates: QuoteUpdate[],
+): Map<string, number | null> {
+  return new Map(updates.map((u) => [u.symbol, u.dailyChange]));
 }

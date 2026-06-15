@@ -17,6 +17,7 @@ export async function fetchQuoteUpdates(symbols: string[]): Promise<QuoteUpdate[
         return {
           symbol,
           price: meta.price,
+          dailyChange: meta.dailyChange,
           preMarketChange: meta.preMarketChange,
           regularMarketChange: meta.regularMarketChange,
           postMarketChange: meta.postMarketChange,

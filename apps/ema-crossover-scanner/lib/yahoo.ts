@@ -1,6 +1,12 @@
 import YahooFinance from "yahoo-finance2";
+import type { DailyChangeQuotePrices } from "./daily-change";
+import { computeDailyChangeFromPrices } from "./daily-change";
 import type { OhlcBar } from "./ema";
 import type { ScanInterval } from "./intervals";
+import {
+  filterSessionChangesForMarket,
+  getUsMarketSession,
+} from "./market-session";
 
 const yahooFinance = new YahooFinance();
 
@@ -197,11 +203,45 @@ function computeSessionChanges(quote: Record<string, unknown>): QuoteSessionChan
   return { preMarketChange, regularMarketChange, postMarketChange };
 }
 
+function quotePrices(quote: Record<string, unknown>): DailyChangeQuotePrices {
+  const num = (key: string): number | undefined => {
+    const value = quote[key];
+    return typeof value === "number" ? value : undefined;
+  };
+
+  return {
+    previousClose: num("regularMarketPreviousClose") ?? null,
+    preMarketPrice: num("preMarketPrice") ?? null,
+    regularMarketPrice: num("regularMarketPrice") ?? null,
+    postMarketPrice: num("postMarketPrice") ?? null,
+  };
+}
+
+function sessionAwarePrice(prices: DailyChangeQuotePrices): number | null {
+  const session = getUsMarketSession();
+  switch (session) {
+    case "pre":
+      return prices.preMarketPrice ?? null;
+    case "regular":
+      return prices.regularMarketPrice ?? null;
+    case "afterHours":
+      return prices.postMarketPrice ?? prices.regularMarketPrice ?? null;
+    case "closed":
+      return (
+        prices.postMarketPrice ??
+        prices.regularMarketPrice ??
+        prices.preMarketPrice ??
+        null
+      );
+  }
+}
+
 export async function fetchQuoteMeta(symbol: string): Promise<{
   name: string | null;
   price: number | null;
   exchange: string | null;
   quoteExchange: string | null;
+  dailyChange: number | null;
 } & QuoteSessionChanges> {
   try {
     const quote = await withTimeout(
@@ -209,14 +249,17 @@ export async function fetchQuoteMeta(symbol: string): Promise<{
       YAHOO_TIMEOUT_MS,
       `Yahoo quote for ${symbol}`,
     );
-    const sessionChanges = computeSessionChanges(
-      quote as unknown as Record<string, unknown>,
+    const raw = quote as unknown as Record<string, unknown>;
+    const prices = quotePrices(raw);
+    const sessionChanges = filterSessionChangesForMarket(
+      computeSessionChanges(raw),
     );
     return {
       name: quote.longName ?? quote.shortName ?? null,
-      price: quote.regularMarketPrice ?? null,
+      price: sessionAwarePrice(prices),
       exchange: quote.fullExchangeName ?? quote.exchange ?? null,
       quoteExchange: quote.exchange ?? null,
+      dailyChange: computeDailyChangeFromPrices(prices),
       ...sessionChanges,
     };
   } catch {
@@ -225,6 +268,7 @@ export async function fetchQuoteMeta(symbol: string): Promise<{
       price: null,
       exchange: null,
       quoteExchange: null,
+      dailyChange: null,
       preMarketChange: null,
       regularMarketChange: null,
       postMarketChange: null,

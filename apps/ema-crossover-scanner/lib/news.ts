@@ -1,6 +1,9 @@
 import YahooFinance from "yahoo-finance2";
+import { computeDailyChange } from "./daily-change";
 import { formatMsAgo } from "./ema";
+import { filterSessionChangesForMarket } from "./market-session";
 import { normalizeCrossover } from "./normalize-scan-result";
+import { fetchQuoteUpdates } from "./quotes";
 import type { StockScanResult } from "./types";
 
 const yahooFinance = new YahooFinance({ suppressNotices: ["yahooSurvey"] });
@@ -13,6 +16,8 @@ const SYMBOL_CONCURRENCY = 6;
 export interface NewsHeadline {
   symbol: string;
   displayTicker: string;
+  /** Combined daily % change (pre + regular + post vs previous close). */
+  dailyChange: number | null;
   headline: string;
   publisher: string;
   url: string;
@@ -43,8 +48,28 @@ export function filterEmaCrossNewsSymbols(results: StockScanResult[]): StockScan
   });
 }
 
+function dailyChangeForRow(
+  row: StockScanResult,
+  quoteDailyChange?: number | null,
+): number | null {
+  if (quoteDailyChange != null) return quoteDailyChange;
+
+  const filtered = filterSessionChangesForMarket({
+    preMarketChange: row.preMarketChange,
+    regularMarketChange: row.regularMarketChange,
+    postMarketChange: row.postMarketChange,
+  });
+
+  return computeDailyChange(
+    filtered.preMarketChange,
+    filtered.regularMarketChange,
+    filtered.postMarketChange,
+  );
+}
+
 async function fetchSymbolNews(
   row: StockScanResult,
+  dailyChange: number | null,
 ): Promise<Omit<NewsHeadline, "msAgo" | "timeAgo">[]> {
   const symbol = row.symbol;
   const displayTicker = row.displayTicker ?? symbol;
@@ -71,6 +96,7 @@ async function fetchSymbolNews(
         return {
           symbol,
           displayTicker,
+          dailyChange,
           headline: item.title,
           publisher: item.publisher ?? "Yahoo Finance",
           url: item.link,
@@ -104,10 +130,19 @@ export async function fetchEmaCrossNews(
   const qualifying = filterEmaCrossNewsSymbols(results);
   if (qualifying.length === 0) return [];
 
+  const quoteUpdates = await fetchQuoteUpdates(qualifying.map((row) => row.symbol));
+  const dailyBySymbol = new Map(
+    quoteUpdates.map((quote) => [quote.symbol, quote.dailyChange]),
+  );
+
   const raw = await mapWithConcurrency(
     qualifying,
     SYMBOL_CONCURRENCY,
-    fetchSymbolNews,
+    (row) =>
+      fetchSymbolNews(
+        row,
+        dailyChangeForRow(row, dailyBySymbol.get(row.symbol)),
+      ),
   );
 
   const now = Date.now();
