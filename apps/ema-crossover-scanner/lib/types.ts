@@ -8,6 +8,12 @@ export interface StockScanResult {
   name: string | null;
   exchange: string | null;
   price: number | null;
+  /** Pre-market $ change vs previous close (Yahoo quote) */
+  preMarketChange: number | null;
+  /** Regular session $ change vs previous close (Yahoo quote) */
+  regularMarketChange: number | null;
+  /** After-hours $ change vs regular close (Yahoo quote) */
+  postMarketChange: number | null;
   ema20: number | null;
   ema50: number | null;
   ema20Above50: boolean;

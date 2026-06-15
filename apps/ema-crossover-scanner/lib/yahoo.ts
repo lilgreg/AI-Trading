@@ -115,21 +115,72 @@ export async function fetchHistoricalBars(
   return aggregateHourlyTo4h(hourly);
 }
 
+export interface QuoteSessionChanges {
+  preMarketChange: number | null;
+  regularMarketChange: number | null;
+  postMarketChange: number | null;
+}
+
+function computeSessionChanges(quote: Record<string, unknown>): QuoteSessionChanges {
+  const num = (key: string): number | undefined => {
+    const value = quote[key];
+    return typeof value === "number" ? value : undefined;
+  };
+
+  const previousClose = num("regularMarketPreviousClose") ?? null;
+  const preMarketPrice = num("preMarketPrice");
+  const regularMarketPrice = num("regularMarketPrice");
+  const postMarketPrice = num("postMarketPrice");
+
+  const preMarketChange =
+    num("preMarketChange") ??
+    (preMarketPrice != null && previousClose != null
+      ? preMarketPrice - previousClose
+      : null);
+
+  const regularMarketChange =
+    num("regularMarketChange") ??
+    (regularMarketPrice != null && previousClose != null
+      ? regularMarketPrice - previousClose
+      : null);
+
+  const regularClose = regularMarketPrice ?? null;
+  const postMarketChange =
+    num("postMarketChange") ??
+    (postMarketPrice != null && regularClose != null
+      ? postMarketPrice - regularClose
+      : null);
+
+  return { preMarketChange, regularMarketChange, postMarketChange };
+}
+
 export async function fetchQuoteMeta(symbol: string): Promise<{
   name: string | null;
   price: number | null;
   exchange: string | null;
   quoteExchange: string | null;
-}> {
+} & QuoteSessionChanges> {
   try {
     const quote = await yahooFinance.quote(symbol);
+    const sessionChanges = computeSessionChanges(
+      quote as unknown as Record<string, unknown>,
+    );
     return {
       name: quote.longName ?? quote.shortName ?? null,
       price: quote.regularMarketPrice ?? null,
       exchange: quote.fullExchangeName ?? quote.exchange ?? null,
       quoteExchange: quote.exchange ?? null,
+      ...sessionChanges,
     };
   } catch {
-    return { name: null, price: null, exchange: null, quoteExchange: null };
+    return {
+      name: null,
+      price: null,
+      exchange: null,
+      quoteExchange: null,
+      preMarketChange: null,
+      regularMarketChange: null,
+      postMarketChange: null,
+    };
   }
 }

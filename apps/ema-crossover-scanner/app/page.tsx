@@ -19,6 +19,46 @@ function formatEma(value: number | null): string {
   return value.toFixed(2);
 }
 
+function changeColorClass(value: number | null): string {
+  if (value == null) return "text-[var(--muted)]";
+  if (value > 0) return "text-[var(--green)]";
+  if (value < 0) return "text-[var(--red)]";
+  return "text-[var(--muted)]";
+}
+
+function formatSessionChange(value: number | null): string {
+  if (value == null) return "—";
+  const sign = value > 0 ? "+" : value < 0 ? "-" : "";
+  const abs = Math.abs(value);
+  return `${sign}$${abs.toFixed(2)}`;
+}
+
+function SessionChangesCell({ row }: { row: StockScanResult }) {
+  const rows = [
+    { label: "Pre", value: row.preMarketChange },
+    { label: "Reg", value: row.regularMarketChange },
+    { label: "AH", value: row.postMarketChange },
+  ] as const;
+
+  const hasAny = rows.some((r) => r.value != null);
+  if (!hasAny) {
+    return <span className="text-[var(--muted)]">—</span>;
+  }
+
+  return (
+    <div className="space-y-0.5 text-xs leading-tight">
+      {rows.map(({ label, value }) => (
+        <div key={label} className="flex items-baseline gap-2">
+          <span className="w-7 shrink-0 text-[var(--muted)]">{label}</span>
+          <span className={`mono ${changeColorClass(value)}`}>
+            {formatSessionChange(value)}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function CrossoverCell({ row }: { row: StockScanResult }) {
   if (row.error) {
     return <span className="text-[var(--red)] text-xs">{row.error}</span>;
@@ -244,6 +284,7 @@ export default function HomePage() {
                 <th>Symbol</th>
                 <th>Name</th>
                 <th>Price</th>
+                <th>Session Δ</th>
                 <th>20 EMA</th>
                 <th>50 EMA</th>
                 <th>Status</th>
@@ -253,7 +294,7 @@ export default function HomePage() {
             <tbody>
               {loading && !data ? (
                 <tr>
-                  <td colSpan={8} className="py-12 text-center text-[var(--muted)]">
+                  <td colSpan={9} className="py-12 text-center text-[var(--muted)]">
                     Fetching market data and computing EMAs…
                   </td>
                 </tr>
@@ -275,6 +316,9 @@ export default function HomePage() {
                       {row.name ?? "—"}
                     </td>
                     <td className="mono">{formatPrice(row.price)}</td>
+                    <td>
+                      <SessionChangesCell row={row} />
+                    </td>
                     <td className="mono">{formatEma(row.ema20)}</td>
                     <td className="mono">{formatEma(row.ema50)}</td>
                     <td>
