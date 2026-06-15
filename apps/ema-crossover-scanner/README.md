@@ -86,12 +86,19 @@ Open [http://localhost:3000](http://localhost:3000) — loads instantly from `.c
 | `BLOB_READ_WRITE_TOKEN` | **Vercel prod** | — | Vercel Blob store for shared cache |
 | `CRON_SECRET` | **Vercel prod** | — | Bearer token for cron route |
 | `SCAN_STALE_MINUTES` | | `15` | Cache TTL before client/cron auto-refresh |
+| `YAHOO_TIMEOUT_MS` | | `20000` | Yahoo chart/quote timeout (ms) |
+| `YAHOO_RETRY_TIMEOUT_MS` | | `30000` | Timeout for Yahoo v8 fallback on retry |
+| `FINNHUB_API_KEY` | optional | — | Hourly bar fallback via Finnhub candles API |
+| `POLYGON_API_KEY` | optional | — | Hourly bar fallback via Polygon aggregates |
+| `TWELVE_DATA_API_KEY` | optional | — | Hourly bar fallback via Twelve Data |
+| `ALPHA_VANTAGE_API_KEY` | optional | — | Hourly bar fallback via AV intraday (strict free-tier limits) |
 
 ## Pattern data vs TradingView
 
 | Option | Feasibility | Notes |
 |--------|-------------|-------|
-| **Yahoo Finance 1h bars (current)** | ✅ Used | Stable on Vercel serverless; 4h bars aggregated in NY timezone to align with TV session buckets |
+| **Yahoo Finance 1h bars (current)** | ✅ Used | Primary source with retries, staggered requests, v8 fallback, and in-scan bar cache |
+| Finnhub / Polygon / Twelve Data / Alpha Vantage | ✅ Optional | Env-key fallbacks when Yahoo throttles (~symbol 120+ in full scans) |
 | TV shared watchlist HTML | ✅ Used | Symbol list only — already merged via `TRADINGVIEW_WATCHLIST_URL` |
 | `scanner.tradingview.com` unofficial REST | ❌ Not used | Undocumented, no SLA, often blocked/rate-limited from datacenter IPs; violates TV ToS |
 | TV chart websocket (`data.tradingview.com`) | ❌ Not used | Requires session auth + persistent connection — poor fit for cron/serverless |

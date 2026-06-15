@@ -4,7 +4,9 @@ import {
   latestEmaValues,
   type CrossoverInfo,
 } from "./ema";
+import { fetchHourlyBars } from "./market-data";
 import { evaluateAllPatterns, NONE_PATTERNS } from "./patterns";
+import { sleep } from "./request-limit";
 import { resolveLogoUrl } from "./symbol-logo";
 import {
   resolveTradingViewSymbol,
@@ -12,16 +14,19 @@ import {
 } from "./stocks";
 import type { CrossoverDisplay, ParsedSymbol, StockScanResult } from "./types";
 import { EMPTY_CROSSOVER } from "./types";
-import {
-  aggregateHourlyTo4h,
-  fetchHourlyBars,
-  fetchQuoteMeta,
-} from "./yahoo";
+import { aggregateHourlyTo4h, fetchQuoteMeta } from "./yahoo";
 
 const FAST_EMA = 20;
 const SLOW_EMA = 50;
-/** Parallel Yahoo fetches per batch — raised cautiously from 8. */
-export const SCAN_BATCH_SIZE = 14;
+
+/** Parallel symbol scans per batch — kept low to avoid Yahoo throttling. */
+export const SCAN_BATCH_SIZE = 4;
+/** Pause between batches of this many symbols (rate-limit cooldown). */
+export const SCAN_BATCH_GROUP_SIZE = 50;
+export const SCAN_BATCH_GROUP_PAUSE_MS = 8_000;
+export const SCAN_BATCH_PAUSE_MS = 1_500;
+export const SCAN_RETRY_COOLDOWN_MS = 10_000;
+export const SCAN_RETRY_BATCH_SIZE = 2;
 
 function buildCrossoverDisplay(cross: CrossoverInfo | null): CrossoverDisplay {
   if (!cross) {
@@ -39,6 +44,24 @@ function buildCrossoverDisplay(cross: CrossoverInfo | null): CrossoverDisplay {
     crossoverTime: formatted.crossoverTime,
     crossoverMsAgo: cross.msAgo,
   };
+}
+
+function isChartFetchError(result: StockScanResult): boolean {
+  if (!result.error) return false;
+  const msg = result.error.toLowerCase();
+  return (
+    msg.includes("timed out") ||
+    msg.includes("timeout") ||
+    msg.includes("yahoo chart") ||
+    msg.includes("yahoo v8") ||
+    msg.includes("429") ||
+    msg.includes("rate") ||
+    msg.includes("no hourly bar data") ||
+    msg.includes("finnhub") ||
+    msg.includes("polygon") ||
+    msg.includes("alpha vantage") ||
+    msg.includes("twelve data")
+  );
 }
 
 export async function scanSymbol(
@@ -73,22 +96,29 @@ export async function scanSymbol(
   };
 
   try {
-    const [hourly, meta] = await Promise.all([
-      fetchHourlyBars(parsed.yahoo, historyDays),
-      fetchQuoteMeta(parsed.yahoo),
-    ]);
-    const bars4h = aggregateHourlyTo4h(hourly);
+    const meta = await fetchQuoteMeta(parsed.yahoo);
 
-    const resolvedTv = resolveTradingViewSymbol(parsed, meta.quoteExchange);
-    base.displayTicker = resolvedTv.includes(":")
-      ? resolvedTv.split(":", 2)[1]
-      : resolvedTv;
-    base.displaySymbol = resolvedTv;
-    base.tradingViewSymbol = resolvedTv;
-    base.tradingViewUrl = tradingViewChartUrl(resolvedTv, "4h");
+    const resolvedTvEarly = resolveTradingViewSymbol(parsed, meta.quoteExchange);
+    base.displayTicker = resolvedTvEarly.includes(":")
+      ? resolvedTvEarly.split(":", 2)[1]
+      : resolvedTvEarly;
+    base.displaySymbol = resolvedTvEarly;
+    base.tradingViewSymbol = resolvedTvEarly;
+    base.tradingViewUrl = tradingViewChartUrl(resolvedTvEarly, "4h");
+
+    let hourly: Awaited<ReturnType<typeof fetchHourlyBars>>["bars"];
+    try {
+      ({ bars: hourly } = await fetchHourlyBars(parsed.yahoo, historyDays));
+    } catch (chartErr) {
+      const message =
+        chartErr instanceof Error ? chartErr.message : "Failed to fetch chart data";
+      return { ...base, ...meta, exchange: meta.exchange ?? parsed.exchange, error: message };
+    }
+
+    const bars4h = aggregateHourlyTo4h(hourly);
     base.logoUrl = await resolveLogoUrl({
       displayTicker: base.displayTicker,
-      tradingViewSymbol: resolvedTv,
+      tradingViewSymbol: base.tradingViewSymbol,
       yahooSymbol: parsed.yahoo,
       companyName: meta.name,
     });
@@ -138,22 +168,91 @@ export interface ScanProgressCallbacks {
   onResult?: (result: StockScanResult) => void;
 }
 
-export async function scanSymbols(
+interface ScanBatchOptions {
+  batchSize?: number;
+  batchPauseMs?: number;
+  groupSize?: number;
+  groupPauseMs?: number;
+}
+
+async function scanSymbolBatch(
   symbols: ParsedSymbol[],
   historyDays: number,
-  includePatternDebug = false,
-  callbacks: ScanProgressCallbacks = {},
+  includePatternDebug: boolean,
+  callbacks: ScanProgressCallbacks,
+  options: ScanBatchOptions,
 ): Promise<StockScanResult[]> {
+  const batchSize = options.batchSize ?? SCAN_BATCH_SIZE;
+  const batchPauseMs = options.batchPauseMs ?? SCAN_BATCH_PAUSE_MS;
+  const groupSize = options.groupSize ?? SCAN_BATCH_GROUP_SIZE;
+  const groupPauseMs = options.groupPauseMs ?? SCAN_BATCH_GROUP_PAUSE_MS;
   const results: StockScanResult[] = [];
 
-  for (let i = 0; i < symbols.length; i += SCAN_BATCH_SIZE) {
-    const batch = symbols.slice(i, i + SCAN_BATCH_SIZE);
+  for (let i = 0; i < symbols.length; i += batchSize) {
+    if (i > 0) {
+      if (i % groupSize === 0) {
+        await sleep(groupPauseMs);
+      } else {
+        await sleep(batchPauseMs);
+      }
+    }
+
+    const batch = symbols.slice(i, i + batchSize);
     const batchResults = await Promise.all(
       batch.map((s) => scanSymbol(s, historyDays, includePatternDebug)),
     );
     for (const result of batchResults) {
       results.push(result);
       callbacks.onResult?.(result);
+    }
+  }
+
+  return results;
+}
+
+export async function scanSymbols(
+  symbols: ParsedSymbol[],
+  historyDays: number,
+  includePatternDebug = false,
+  callbacks: ScanProgressCallbacks = {},
+): Promise<StockScanResult[]> {
+  const results = await scanSymbolBatch(
+    symbols,
+    historyDays,
+    includePatternDebug,
+    callbacks,
+    {},
+  );
+
+  const failedIndexes = results
+    .map((result, index) => (isChartFetchError(result) ? index : -1))
+    .filter((index) => index >= 0);
+
+  if (failedIndexes.length === 0) {
+    return sortByRecentCrossover(results);
+  }
+
+  await sleep(SCAN_RETRY_COOLDOWN_MS);
+
+  const retrySymbols = failedIndexes.map((index) => symbols[index]);
+  const retryResults = await scanSymbolBatch(
+    retrySymbols,
+    historyDays,
+    includePatternDebug,
+    callbacks,
+    {
+      batchSize: SCAN_RETRY_BATCH_SIZE,
+      batchPauseMs: 2_000,
+      groupSize: 20,
+      groupPauseMs: 5_000,
+    },
+  );
+
+  for (let i = 0; i < failedIndexes.length; i += 1) {
+    const originalIndex = failedIndexes[i];
+    const retry = retryResults[i];
+    if (!retry.error || retry.ema20 != null) {
+      results[originalIndex] = retry;
     }
   }
 
@@ -183,3 +282,5 @@ export function sortByRecentCrossover(results: StockScanResult[]): StockScanResu
     return a.displayTicker.localeCompare(b.displayTicker);
   });
 }
+
+export { isChartFetchError };
