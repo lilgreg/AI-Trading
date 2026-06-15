@@ -1,6 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  fetchNewsPreview,
+  getCachedNewsPreview,
+} from "@/lib/news-preview-cache";
 import type { NewsHeadline } from "@/lib/news";
 
 function changeColorClass(value: number | null): string {
@@ -25,6 +29,15 @@ function longestSummary(...candidates: (string | null | undefined)[]): string | 
   return best || null;
 }
 
+function growSummary(
+  current: string,
+  ...candidates: (string | null | undefined)[]
+): string {
+  const best = longestSummary(current, ...candidates);
+  if (!best) return current;
+  return best.length > current.length ? best : current;
+}
+
 interface NewsArticleModalProps {
   article: NewsHeadline | null;
   onClose: () => void;
@@ -32,21 +45,15 @@ interface NewsArticleModalProps {
 
 export function NewsArticleModal({ article, onClose }: NewsArticleModalProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
-  const [fetchedSummary, setFetchedSummary] = useState<string | null>(null);
-  const [summaryLoading, setSummaryLoading] = useState(false);
+  const [displaySummary, setDisplaySummary] = useState("");
+  const [previewPending, setPreviewPending] = useState(false);
 
   const handleClose = useCallback(() => {
     onClose();
   }, [onClose]);
 
   useEffect(() => {
-    if (!article) {
-      setFetchedSummary(null);
-      setSummaryLoading(false);
-      return;
-    }
-
-    setFetchedSummary(null);
+    if (!article) return;
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") handleClose();
@@ -62,36 +69,48 @@ export function NewsArticleModal({ article, onClose }: NewsArticleModalProps) {
   }, [article, handleClose]);
 
   useEffect(() => {
-    if (!article) return;
+    if (!article) {
+      setDisplaySummary("");
+      setPreviewPending(false);
+      return;
+    }
 
     const controller = new AbortController();
-    const hasYahooSummary = Boolean(article.summary?.trim());
-    setSummaryLoading(!hasYahooSummary);
+    let cancelled = false;
+
+    const applyGrow = (...candidates: (string | null | undefined)[]) => {
+      if (cancelled) return;
+      setDisplaySummary((prev) => growSummary(prev, ...candidates));
+    };
+
+    const seed = longestSummary(article.summary, getCachedNewsPreview(article.url)) ?? "";
+    setDisplaySummary(seed);
+    setPreviewPending(!seed);
 
     void (async () => {
       try {
-        const res = await fetch(
-          `/api/news/preview?url=${encodeURIComponent(article.url)}`,
-          { signal: controller.signal, cache: "no-store" },
-        );
-        if (!res.ok) return;
-        const body = (await res.json()) as { summary?: string | null };
-        if (body.summary?.trim()) setFetchedSummary(body.summary.trim());
+        const preview = await fetchNewsPreview(article.url, controller.signal);
+        applyGrow(preview);
       } catch {
         // ignore preview fetch errors
       } finally {
-        if (!controller.signal.aborted) setSummaryLoading(false);
+        if (cancelled) return;
+        setPreviewPending(false);
+        applyGrow(article.headline);
       }
     })();
 
-    return () => controller.abort();
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
   }, [article]);
 
   if (!article) return null;
 
-  const summary =
-    longestSummary(article.summary, fetchedSummary) ??
-    (summaryLoading ? null : article.headline);
+  const summaryText =
+    displaySummary || (!previewPending ? article.headline : "");
+  const showLoadingHint = previewPending && !displaySummary;
 
   return (
     <div
@@ -139,11 +158,16 @@ export function NewsArticleModal({ article, onClose }: NewsArticleModalProps) {
         </div>
 
         <div className="news-modal-body">
-          {summaryLoading && !summary ? (
-            <p className="news-modal-summary-loading">Loading summary…</p>
-          ) : (
-            <p className="news-modal-summary">{summary}</p>
+          {showLoadingHint && (
+            <span className="news-modal-summary-status" aria-live="polite">
+              Loading summary…
+            </span>
           )}
+          <p
+            className={`news-modal-summary${showLoadingHint ? " news-modal-summary-pending" : ""}`}
+          >
+            {summaryText}
+          </p>
         </div>
 
         <div className="news-modal-footer">

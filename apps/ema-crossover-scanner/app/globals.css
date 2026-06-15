@@ -368,8 +368,9 @@ table.scan-table tbody tr:hover {
 }
 
 .news-modal-body {
+  position: relative;
   flex: 1 1 auto;
-  min-height: 0;
+  min-height: min(60vh, 28rem);
   max-height: 80vh;
   overflow-y: auto;
   padding: 1.25rem 1.5rem;
@@ -377,16 +378,25 @@ table.scan-table tbody tr:hover {
 
 .news-modal-summary {
   margin: 0;
+  min-height: 100%;
   font-size: 0.9375rem;
   line-height: 1.65;
   color: var(--text);
   white-space: pre-wrap;
+  transition: opacity 0.2s ease;
 }
 
-.news-modal-summary-loading {
-  margin: 0;
-  font-size: 0.9375rem;
+.news-modal-summary-pending {
   color: var(--muted);
+}
+
+.news-modal-summary-status {
+  position: absolute;
+  top: 1.25rem;
+  right: 1.5rem;
+  font-size: 0.75rem;
+  color: var(--muted);
+  pointer-events: none;
 }
 
 .news-modal-footer {

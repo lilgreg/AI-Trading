@@ -16,6 +16,7 @@ import { applyQuoteUpdates, dailyChangeByQuoteUpdates } from "@/lib/quote-update
 import { StockLogo } from "@/components/stock-logo";
 import { NewsArticleModal } from "@/components/news-article-modal";
 import type { NewsHeadline } from "@/lib/news";
+import { prefetchNewsPreview } from "@/lib/news-preview-cache";
 import type {
   CachedScanResponse,
   CrossoverDisplay,
@@ -774,6 +775,8 @@ export default function HomePage() {
                   key={headlineId}
                   type="button"
                   className={`news-chip${isNew ? " news-chip-new" : ""}`}
+                  onMouseEnter={() => prefetchNewsPreview(item.url)}
+                  onFocus={() => prefetchNewsPreview(item.url)}
                   onClick={() =>
                     setSelectedNewsArticle({
                       ...item,
