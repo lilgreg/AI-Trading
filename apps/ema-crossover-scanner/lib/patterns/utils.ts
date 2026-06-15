@@ -479,17 +479,17 @@ export function evaluateHeadShouldersStatus(
   const hasBreakdown = hasNecklineBreakdown(bars, confirmIdx, neckline);
   const rightShoulderHigh = barHigh(bars[confirmIdx]);
 
-  const confirmedActive =
+  // Active only after neckline breakdown — same lifecycle bar as double top.
+  // Pre-breakdown "forming" H&S was matching most trending names and drowning out DB/DT/IHS.
+  if (
+    hasBreakdown &&
     targetHitIdx == null &&
     reclaimedIdx == null &&
     rightShoulderHigh < resistance * 0.998 &&
-    currentPrice <= resistance * 1.002 &&
+    currentPrice <= neckline * 1.002 &&
     currentPrice > target &&
-    (hasBreakdown
-      ? currentPrice <= neckline * 1.008
-      : currentPrice >= neckline * 0.97 && currentPrice <= resistance * 0.999);
-
-  if (confirmedActive) {
+    currentPrice <= resistance * 1.01
+  ) {
     return { status: "Active", confirmMsAgo, levels: pattern };
   }
 
