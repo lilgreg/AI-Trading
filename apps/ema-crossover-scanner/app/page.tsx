@@ -694,48 +694,47 @@ export default function HomePage() {
       </section>
 
       <section className="card">
-        <div className="overflow-x-auto">
-          <table className="scan-table">
-            <thead className="scan-table-head">
-              <tr>
-                <th>#</th>
-                <th colSpan={2}>Symbol</th>
-                <th>Name</th>
-                <th>Price</th>
-                <th
-                  className="sortable"
-                  onClick={() => handleSort("session")}
-                  aria-sort={ariaSortValue("session", sortKey, sortDir)}
-                >
-                  Session Δ{sortIndicator(sortKey === "session", sortDir)}
-                </th>
-                <th
-                  className="sortable"
-                  onClick={() => handleSort("patterns")}
-                  aria-sort={ariaSortValue("patterns", sortKey, sortDir)}
-                >
-                  Patterns{sortIndicator(sortKey === "patterns", sortDir)}
-                </th>
-                <th>20 EMA (4h)</th>
-                <th>50 EMA (4h)</th>
-                <th>Status (4h)</th>
-                <th
-                  className="sortable"
-                  onClick={() => handleSort("cross4h")}
-                  aria-sort={ariaSortValue("cross4h", sortKey, sortDir)}
-                >
-                  Cross 4h{sortIndicator(sortKey === "cross4h", sortDir)}
-                </th>
-                <th
-                  className="sortable"
-                  onClick={() => handleSort("cross1h")}
-                  aria-sort={ariaSortValue("cross1h", sortKey, sortDir)}
-                >
-                  Cross 1h{sortIndicator(sortKey === "cross1h", sortDir)}
-                </th>
-              </tr>
-            </thead>
-            <tbody>
+        <table className="scan-table">
+          <thead className="scan-table-head">
+            <tr>
+              <th>#</th>
+              <th colSpan={2}>Symbol</th>
+              <th>Name</th>
+              <th>Price</th>
+              <th
+                className="sortable"
+                onClick={() => handleSort("session")}
+                aria-sort={ariaSortValue("session", sortKey, sortDir)}
+              >
+                Session Δ{sortIndicator(sortKey === "session", sortDir)}
+              </th>
+              <th
+                className="sortable"
+                onClick={() => handleSort("patterns")}
+                aria-sort={ariaSortValue("patterns", sortKey, sortDir)}
+              >
+                Patterns{sortIndicator(sortKey === "patterns", sortDir)}
+              </th>
+              <th>20 EMA (4h)</th>
+              <th>50 EMA (4h)</th>
+              <th>Status (4h)</th>
+              <th
+                className="sortable"
+                onClick={() => handleSort("cross4h")}
+                aria-sort={ariaSortValue("cross4h", sortKey, sortDir)}
+              >
+                Cross 4h{sortIndicator(sortKey === "cross4h", sortDir)}
+              </th>
+              <th
+                className="sortable"
+                onClick={() => handleSort("cross1h")}
+                aria-sort={ariaSortValue("cross1h", sortKey, sortDir)}
+              >
+                Cross 1h{sortIndicator(sortKey === "cross1h", sortDir)}
+              </th>
+            </tr>
+          </thead>
+          <tbody>
               {loading && !data ? (
                 <tr>
                   <td colSpan={12} className="py-12 text-center text-[var(--muted)]">
@@ -820,7 +819,6 @@ export default function HomePage() {
               )}
             </tbody>
           </table>
-        </div>
       </section>
 
       <footer className="mt-8 text-xs text-[var(--muted)]">

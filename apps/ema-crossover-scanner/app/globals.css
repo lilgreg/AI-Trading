@@ -103,9 +103,12 @@ body {
   border-color: var(--accent);
 }
 
+/* No overflow on table ancestors — it clips position:sticky thead cells. */
 table.scan-table {
   width: 100%;
-  border-collapse: collapse;
+  min-width: 960px;
+  border-collapse: separate;
+  border-spacing: 0;
   font-size: 0.875rem;
 }
 
