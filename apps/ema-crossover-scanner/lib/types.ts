@@ -1,6 +1,7 @@
 export interface StockScanResult {
   symbol: string;
   displaySymbol: string;
+  tradingViewSymbol: string;
   name: string | null;
   exchange: string | null;
   price: number | null;
@@ -8,6 +9,8 @@ export interface StockScanResult {
   ema50: number | null;
   ema20Above50: boolean;
   crossoverDate: string | null;
+  crossoverTime: string | null;
+  crossoverMsAgo: number | null;
   crossoverDaysAgo: number | null;
   tradingViewUrl: string;
   error?: string;
@@ -15,6 +18,7 @@ export interface StockScanResult {
 
 export interface ScanResponse {
   scannedAt: string;
+  interval: "1h" | "4h";
   symbolCount: number;
   results: StockScanResult[];
   sources: {

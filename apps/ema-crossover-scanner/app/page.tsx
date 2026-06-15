@@ -1,6 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { formatMsAgo } from "@/lib/ema";
+import type { ScanInterval } from "@/lib/intervals";
 import type { ScanResponse, StockScanResult } from "@/lib/types";
 
 function formatPrice(value: number | null): string {
@@ -33,8 +35,15 @@ function CrossoverCell({ row }: { row: StockScanResult }) {
   return (
     <div>
       <div className="font-medium">{row.crossoverDate}</div>
+      {row.crossoverTime && (
+        <div className="text-sm text-[var(--text)]">{row.crossoverTime}</div>
+      )}
       <div className="text-xs text-[var(--muted)]">
-        {row.crossoverDaysAgo === 0 ? "Today" : `${row.crossoverDaysAgo}d ago`}
+        {row.crossoverMsAgo != null
+          ? formatMsAgo(row.crossoverMsAgo)
+          : row.crossoverDaysAgo === 0
+            ? "Today"
+            : `${row.crossoverDaysAgo}d ago`}
       </div>
     </div>
   );
@@ -51,6 +60,7 @@ export default function HomePage() {
   const [onlyAbove, setOnlyAbove] = useState(false);
   const [watchlist, setWatchlist] = useState("");
   const [tvWatchlistUrl, setTvWatchlistUrl] = useState(DEFAULT_TV_WATCHLIST);
+  const [interval, setInterval] = useState<ScanInterval>("4h");
 
   const runScan = useCallback(async () => {
     setLoading(true);
@@ -62,6 +72,7 @@ export default function HomePage() {
       if (onlyAbove) params.set("onlyAbove", "true");
       if (watchlist.trim()) params.set("watchlist", watchlist.trim());
       if (tvWatchlistUrl.trim()) params.set("tvWatchlist", tvWatchlistUrl.trim());
+      params.set("interval", interval);
 
       const res = await fetch(`/api/scan?${params.toString()}`);
       if (!res.ok) {
@@ -76,7 +87,7 @@ export default function HomePage() {
     } finally {
       setLoading(false);
     }
-  }, [includeBlueChips, onlyAbove, watchlist, tvWatchlistUrl]);
+  }, [includeBlueChips, onlyAbove, watchlist, tvWatchlistUrl, interval]);
 
   useEffect(() => {
     void runScan();
@@ -106,14 +117,30 @@ export default function HomePage() {
           20 EMA × 50 EMA Crossover Rank
         </h1>
         <p className="mt-2 max-w-2xl text-[var(--muted)]">
-          Stocks ranked by how recently the 20-day EMA crossed above the 50-day EMA.
-          Merges your shared TradingView watchlist with blue-chip defaults (overlaps deduped).
+          Ranks stocks by the most recent full cycle where the 20 EMA crossed below
+          the 50, then back above. Uses {interval} candles from your TradingView
+          watchlist plus blue-chip defaults (overlaps deduped).
         </p>
       </header>
 
       <section className="card mb-6 p-4 sm:p-5">
         <div className="grid gap-4 lg:grid-cols-[1fr_auto] lg:items-end">
           <div className="space-y-3">
+            <label className="block text-sm text-[var(--muted)]">
+              Chart interval
+            </label>
+            <div className="flex gap-2">
+              {(["4h", "1h"] as const).map((value) => (
+                <button
+                  key={value}
+                  type="button"
+                  className={`btn ${interval === value ? "btn-primary" : "btn-secondary"}`}
+                  onClick={() => setInterval(value)}
+                >
+                  {value}
+                </button>
+              ))}
+            </div>
             <label className="block text-sm text-[var(--muted)]">
               TradingView shared watchlist link
             </label>
@@ -181,6 +208,10 @@ export default function HomePage() {
 
       <section className="mb-4 flex flex-wrap gap-3 text-sm">
         <div className="card px-4 py-2">
+          <span className="text-[var(--muted)]">Interval</span>{" "}
+          <span className="font-semibold">{data?.interval ?? interval}</span>
+        </div>
+        <div className="card px-4 py-2">
           <span className="text-[var(--muted)]">Symbols</span>{" "}
           <span className="font-semibold">{data?.symbolCount ?? "—"}</span>
         </div>
@@ -217,13 +248,12 @@ export default function HomePage() {
                 <th>50 EMA</th>
                 <th>Status</th>
                 <th>Last bullish cross</th>
-                <th>Chart</th>
               </tr>
             </thead>
             <tbody>
               {loading && !data ? (
                 <tr>
-                  <td colSpan={9} className="py-12 text-center text-[var(--muted)]">
+                  <td colSpan={8} className="py-12 text-center text-[var(--muted)]">
                     Fetching market data and computing EMAs…
                   </td>
                 </tr>
@@ -231,7 +261,16 @@ export default function HomePage() {
                 data?.results.map((row, index) => (
                   <tr key={row.symbol}>
                     <td className="text-[var(--muted)]">{index + 1}</td>
-                    <td className="mono font-medium">{row.displaySymbol}</td>
+                    <td className="mono font-medium">
+                      <a
+                        href={row.tradingViewUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-[var(--accent)] hover:underline"
+                      >
+                        {row.displaySymbol}
+                      </a>
+                    </td>
                     <td className="max-w-[220px] truncate text-[var(--muted)]">
                       {row.name ?? "—"}
                     </td>
@@ -256,16 +295,6 @@ export default function HomePage() {
                     <td>
                       <CrossoverCell row={row} />
                     </td>
-                    <td>
-                      <a
-                        href={row.tradingViewUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-sm text-[var(--accent)] hover:underline"
-                      >
-                        TradingView ↗
-                      </a>
-                    </td>
                   </tr>
                 ))
               )}
@@ -275,8 +304,8 @@ export default function HomePage() {
       </section>
 
       <footer className="mt-8 text-xs text-[var(--muted)]">
-        Price data via Yahoo Finance. Not financial advice. Crossover dates reflect daily closes
-        over the configured lookback window.
+        Price data via Yahoo Finance ({interval} candles). Cross requires 20 EMA to cross
+        below 50 before crossing back above. Not financial advice.
       </footer>
     </main>
   );

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { parseScanInterval } from "@/lib/intervals";
 import { scanSymbols } from "@/lib/scanner";
 import { buildSymbolUniverse } from "@/lib/symbols";
 import type { ScanResponse } from "@/lib/types";
@@ -20,6 +21,7 @@ export async function GET(request: NextRequest) {
   const includeBlueChips = searchParams.get("blueChips") !== "false";
   const onlyAbove = searchParams.get("onlyAbove") === "true";
   const historyDays = parseHistoryDays(searchParams.get("days"));
+  const interval = parseScanInterval(searchParams.get("interval"));
 
   const { symbols, sources, tradingViewWatchlistName } = await buildSymbolUniverse({
     includeBlueChips,
@@ -35,7 +37,7 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  let results = await scanSymbols(symbols, historyDays);
+  let results = await scanSymbols(symbols, historyDays, interval);
 
   if (onlyAbove) {
     results = results.filter((r) => r.ema20Above50 && !r.error);
@@ -43,6 +45,7 @@ export async function GET(request: NextRequest) {
 
   const response: ScanResponse = {
     scannedAt: new Date().toISOString(),
+    interval,
     symbolCount: results.length,
     results,
     sources,
@@ -60,6 +63,7 @@ export async function POST(request: NextRequest) {
     blueChips?: boolean;
     onlyAbove?: boolean;
     days?: number;
+    interval?: string;
   } = {};
 
   try {
@@ -75,6 +79,7 @@ export async function POST(request: NextRequest) {
   if (body.blueChips === false) params.set("blueChips", "false");
   if (body.onlyAbove) params.set("onlyAbove", "true");
   if (body.days) params.set("days", String(body.days));
+  if (body.interval) params.set("interval", body.interval);
 
   const url = new URL(request.url);
   url.search = params.toString();

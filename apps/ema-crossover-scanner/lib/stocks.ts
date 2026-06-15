@@ -1,3 +1,5 @@
+import type { ScanInterval } from "./intervals";
+import { tradingViewIntervalParam } from "./intervals";
 import type { ParsedSymbol } from "./types";
 
 /** Default large-cap / blue-chip universe */
@@ -33,6 +35,68 @@ export const BLUE_CHIP_SYMBOLS = [
   "ACN",
   "MCD",
 ] as const;
+
+/** TradingView exchange prefix for common tickers without EXCHANGE: prefix */
+const TICKER_EXCHANGE: Record<string, string> = {
+  AAPL: "NASDAQ",
+  MSFT: "NASDAQ",
+  GOOGL: "NASDAQ",
+  AMZN: "NASDAQ",
+  NVDA: "NASDAQ",
+  META: "NASDAQ",
+  "BRK-B": "NYSE",
+  JPM: "NYSE",
+  V: "NYSE",
+  UNH: "NYSE",
+  JNJ: "NYSE",
+  WMT: "NYSE",
+  PG: "NYSE",
+  MA: "NYSE",
+  HD: "NYSE",
+  DIS: "NYSE",
+  BAC: "NYSE",
+  XOM: "NYSE",
+  CVX: "NYSE",
+  LLY: "NYSE",
+  AVGO: "NASDAQ",
+  COST: "NASDAQ",
+  ABBV: "NYSE",
+  KO: "NYSE",
+  PEP: "NASDAQ",
+  MRK: "NYSE",
+  TMO: "NYSE",
+  CSCO: "NASDAQ",
+  ACN: "NYSE",
+  MCD: "NYSE",
+};
+
+const YAHOO_TO_TV_EXCHANGE: Record<string, string> = {
+  NMS: "NASDAQ",
+  NGM: "NASDAQ",
+  NCM: "NASDAQ",
+  NYQ: "NYSE",
+  PCX: "AMEX",
+  BTS: "CBOE",
+};
+
+export function yahooExchangeToTradingView(code: string | null | undefined): string | null {
+  if (!code) return null;
+  return YAHOO_TO_TV_EXCHANGE[code.toUpperCase()] ?? null;
+}
+
+export function resolveTradingViewSymbol(
+  parsed: ParsedSymbol,
+  quoteExchange?: string | null,
+): string {
+  if (parsed.display.includes(":")) return parsed.display;
+
+  const fromQuote = yahooExchangeToTradingView(quoteExchange);
+  const fromMap = TICKER_EXCHANGE[parsed.yahoo];
+  const exchange = parsed.exchange ?? fromQuote ?? fromMap ?? "NASDAQ";
+  const ticker = parsed.yahoo.replace(/-/g, ".");
+
+  return `${exchange}:${ticker}`;
+}
 
 /** Parse TradingView-style symbols into Yahoo Finance format. */
 export function parseSymbol(input: string): ParsedSymbol | null {
@@ -76,7 +140,14 @@ export function parseSymbolList(text: string): ParsedSymbol[] {
   return result;
 }
 
-export function tradingViewChartUrl(displaySymbol: string): string {
-  const encoded = encodeURIComponent(displaySymbol.replace("-", "."));
-  return `https://www.tradingview.com/chart/?symbol=${encoded}`;
+export function tradingViewChartUrl(
+  tvSymbol: string,
+  interval: ScanInterval = "4h",
+): string {
+  const layout = process.env.TRADINGVIEW_CHART_LAYOUT ?? "fW1aFTNk";
+  const params = new URLSearchParams({
+    symbol: tvSymbol,
+    interval: tradingViewIntervalParam(interval),
+  });
+  return `https://www.tradingview.com/chart/${layout}/?${params.toString()}`;
 }
