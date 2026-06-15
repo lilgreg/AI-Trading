@@ -7,8 +7,6 @@ import {
 } from "@/lib/news-preview-cache";
 import type { NewsHeadline } from "@/lib/news";
 
-const ADEQUATE_SUMMARY_LEN = 100;
-
 function changeColorClass(value: number | null): string {
   if (value == null) return "text-[var(--muted)]";
   if (value > 0) return "text-[var(--green)]";
@@ -22,26 +20,13 @@ function formatSessionChange(value: number | null): string {
   return `${sign}${value.toFixed(2)}%`;
 }
 
-function longestSummary(...candidates: (string | null | undefined)[]): string | null {
+function longestSummary(...candidates: (string | null | undefined)[]): string {
   let best = "";
   for (const candidate of candidates) {
     const trimmed = candidate?.trim();
     if (trimmed && trimmed.length > best.length) best = trimmed;
   }
-  return best || null;
-}
-
-function growSummary(
-  current: string,
-  ...candidates: (string | null | undefined)[]
-): string {
-  const best = longestSummary(current, ...candidates);
-  if (!best) return current;
-  return best.length > current.length ? best : current;
-}
-
-function hasAdequateSummary(text: string | null | undefined): boolean {
-  return Boolean(text?.trim() && text.trim().length >= ADEQUATE_SUMMARY_LEN);
+  return best;
 }
 
 interface NewsArticleModalProps {
@@ -84,29 +69,26 @@ export function NewsArticleModal({ article, onClose }: NewsArticleModalProps) {
     const controller = new AbortController();
     let cancelled = false;
 
-    const applyGrow = (...candidates: (string | null | undefined)[]) => {
+    const applyBest = (...candidates: (string | null | undefined)[]) => {
       if (cancelled) return;
-      setDisplaySummary((prev) => growSummary(prev, ...candidates));
+      setDisplaySummary((prev) => longestSummary(prev, ...candidates));
     };
 
     const yahooSummary = article.summary?.trim() ?? "";
     const cachedPreview = getCachedNewsPreview(article.url);
-    const seed = longestSummary(yahooSummary, cachedPreview) ?? "";
+    const seed = longestSummary(yahooSummary, cachedPreview);
     setDisplaySummary(seed);
-    setPreviewPending(!hasAdequateSummary(seed));
+    setPreviewPending(Boolean(article.url));
 
     void (async () => {
       try {
         const preview = await fetchNewsPreviewFresh(article.url, controller.signal);
-        applyGrow(preview);
+        if (cancelled) return;
+        applyBest(yahooSummary, preview);
       } catch {
         // ignore preview fetch errors
       } finally {
-        if (cancelled) return;
-        setPreviewPending(false);
-        if (!hasAdequateSummary(yahooSummary)) {
-          applyGrow(article.headline);
-        }
+        if (!cancelled) setPreviewPending(false);
       }
     })();
 
@@ -118,10 +100,7 @@ export function NewsArticleModal({ article, onClose }: NewsArticleModalProps) {
 
   if (!article) return null;
 
-  const summaryText =
-    displaySummary ||
-    article.summary?.trim() ||
-    (!previewPending ? article.headline : "");
+  const summaryText = displaySummary.trim();
   const showLoadingHint = previewPending && !summaryText;
 
   return (
@@ -196,11 +175,19 @@ export function NewsArticleModal({ article, onClose }: NewsArticleModalProps) {
               Loading summary…
             </span>
           )}
-          <p
-            className={`news-modal-summary${showLoadingHint ? " news-modal-summary-pending" : ""}`}
-          >
-            {summaryText}
-          </p>
+          {summaryText ? (
+            <div
+              className={`news-modal-summary${showLoadingHint ? " news-modal-summary-pending" : ""}`}
+            >
+              {summaryText}
+            </div>
+          ) : (
+            !previewPending && (
+              <p className="news-modal-summary-empty">
+                No summary available. Open the full article below.
+              </p>
+            )
+          )}
         </div>
 
         <div className="news-modal-footer">

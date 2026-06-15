@@ -29,6 +29,7 @@ export interface ScanJobConfig {
 
 /** Persist partial progress every N completed symbols. */
 const PARTIAL_SAVE_EVERY = 8;
+const DEFAULT_RETRY_BATCH = 50;
 
 function parseHistoryDays(value: string | undefined): number {
   const parsed = Number(value ?? 120);
@@ -69,6 +70,18 @@ export function buildConfigKey(config: ScanJobConfig): string {
 
 function isSuccessfulResult(result: StockScanResult): boolean {
   return !result.error && result.ema20 != null && result.ema50 != null;
+}
+
+/** Symbols that need a (re)scan — includes timeouts, missing EMA, and never-scanned rows. */
+export function isRetryableResult(result: StockScanResult): boolean {
+  if (isSuccessfulResult(result)) return false;
+  if (!result.error) return result.ema20 == null || result.ema50 == null;
+  if (result.error === "Not scanned yet") return true;
+  return true;
+}
+
+export function countRetryableResults(results: StockScanResult[]): number {
+  return results.filter(isRetryableResult).length;
 }
 
 function buildOrderedResults(
@@ -117,6 +130,19 @@ function symbolsNeedingScan(
   });
 }
 
+function isScanFullyAttempted(
+  symbols: ParsedSymbol[],
+  resultsBySymbol: Map<string, StockScanResult>,
+  fallbackBySymbol: Map<string, StockScanResult>,
+): boolean {
+  return symbols.every((parsed) => {
+    const row =
+      resultsBySymbol.get(parsed.yahoo) ?? fallbackBySymbol.get(parsed.yahoo);
+    if (!row) return false;
+    return row.error !== "Not scanned yet";
+  });
+}
+
 function buildSnapshot(
   symbols: ParsedSymbol[],
   resultsBySymbol: Map<string, StockScanResult>,
@@ -144,6 +170,107 @@ function buildSnapshot(
   };
 }
 
+async function mergeScanResults(
+  overrides: Partial<ScanJobConfig>,
+  options: {
+    rescanAll?: boolean;
+    symbolFilter?: (parsed: ParsedSymbol) => boolean;
+    maxSymbols?: number;
+  } = {},
+): Promise<ScanSnapshot | null> {
+  const config = resolveScanJobConfig(overrides);
+  const configKey = buildConfigKey(config);
+  const rescanAll = options.rescanAll === true;
+
+  const { symbols, sources, tradingViewWatchlistName } =
+    await buildSymbolUniverse({
+      includeBlueChips: config.includeBlueChips,
+      watchlistText: config.watchlistText,
+      customSymbols: config.customSymbols,
+      tradingViewWatchlistUrl: config.tradingViewWatchlistUrl,
+    });
+
+  if (symbols.length === 0) {
+    throw new Error(
+      "No symbols configured. Set WATCHLIST_SYMBOLS or TRADINGVIEW_WATCHLIST_URL.",
+    );
+  }
+
+  const existing = await loadSnapshot();
+  const existingBySymbol = new Map<string, StockScanResult>();
+  if (existing?.configKey === configKey && existing.results?.length) {
+    for (const row of existing.results) {
+      existingBySymbol.set(row.symbol, row);
+    }
+  }
+
+  const resultsBySymbol = new Map<string, StockScanResult>();
+  if (!rescanAll) {
+    for (const [symbol, row] of existingBySymbol) {
+      if (isSuccessfulResult(row)) {
+        resultsBySymbol.set(symbol, row);
+      }
+    }
+  }
+
+  const previousCompletedAt = existing?.completedAt ?? null;
+  const fallbackBySymbol = rescanAll ? new Map<string, StockScanResult>() : existingBySymbol;
+
+  let toScan = symbolsNeedingScan(symbols, existingBySymbol, rescanAll);
+  if (options.symbolFilter) {
+    toScan = toScan.filter(options.symbolFilter);
+  }
+  if (options.maxSymbols != null && options.maxSymbols > 0) {
+    toScan = toScan.slice(0, options.maxSymbols);
+  }
+
+  let completedSinceSave = 0;
+
+  const persistPartial = async (scanComplete: boolean) => {
+    await saveSnapshot(
+      buildSnapshot(
+        symbols,
+        resultsBySymbol,
+        fallbackBySymbol,
+        configKey,
+        sources,
+        tradingViewWatchlistName,
+        scanComplete,
+        previousCompletedAt,
+      ),
+    );
+  };
+
+  if (toScan.length > 0) {
+    await scanSymbols(toScan, config.historyDays, false, {
+      onResult: async (result) => {
+        resultsBySymbol.set(result.symbol, result);
+        completedSinceSave += 1;
+        if (completedSinceSave >= PARTIAL_SAVE_EVERY) {
+          completedSinceSave = 0;
+          await persistPartial(false);
+        }
+      },
+    });
+  }
+
+  const scanComplete = isScanFullyAttempted(symbols, resultsBySymbol, fallbackBySymbol);
+  const snapshot = buildSnapshot(
+    symbols,
+    resultsBySymbol,
+    fallbackBySymbol,
+    configKey,
+    sources,
+    tradingViewWatchlistName,
+    scanComplete,
+    previousCompletedAt,
+  );
+
+  await saveSnapshot(snapshot);
+  setScanError(null);
+  return snapshot;
+}
+
 export async function runBackgroundScan(
   overrides: Partial<ScanJobConfig> = {},
   options: { force?: boolean } = {},
@@ -151,89 +278,8 @@ export async function runBackgroundScan(
   const acquired = await tryAcquireScanLock();
   if (!acquired) return null;
 
-  const config = resolveScanJobConfig(overrides);
-  const configKey = buildConfigKey(config);
-  const rescanAll = options.force === true;
-
   try {
-    const { symbols, sources, tradingViewWatchlistName } =
-      await buildSymbolUniverse({
-        includeBlueChips: config.includeBlueChips,
-        watchlistText: config.watchlistText,
-        customSymbols: config.customSymbols,
-        tradingViewWatchlistUrl: config.tradingViewWatchlistUrl,
-      });
-
-    if (symbols.length === 0) {
-      throw new Error(
-        "No symbols configured. Set WATCHLIST_SYMBOLS or TRADINGVIEW_WATCHLIST_URL.",
-      );
-    }
-
-    const existing = await loadSnapshot();
-    const existingBySymbol = new Map<string, StockScanResult>();
-    if (existing?.configKey === configKey && existing.results?.length) {
-      for (const row of existing.results) {
-        existingBySymbol.set(row.symbol, row);
-      }
-    }
-
-    const resultsBySymbol = new Map<string, StockScanResult>();
-    if (!rescanAll) {
-      for (const [symbol, row] of existingBySymbol) {
-        if (isSuccessfulResult(row)) {
-          resultsBySymbol.set(symbol, row);
-        }
-      }
-    }
-
-    const previousCompletedAt = existing?.completedAt ?? null;
-    const fallbackBySymbol = rescanAll ? new Map<string, StockScanResult>() : existingBySymbol;
-    const toScan = symbolsNeedingScan(symbols, existingBySymbol, rescanAll);
-    let completedSinceSave = 0;
-
-    const persistPartial = async (scanComplete: boolean) => {
-      await saveSnapshot(
-        buildSnapshot(
-          symbols,
-          resultsBySymbol,
-          fallbackBySymbol,
-          configKey,
-          sources,
-          tradingViewWatchlistName,
-          scanComplete,
-          previousCompletedAt,
-        ),
-      );
-    };
-
-    if (toScan.length > 0) {
-      await scanSymbols(toScan, config.historyDays, false, {
-        onResult: (result) => {
-          resultsBySymbol.set(result.symbol, result);
-          completedSinceSave += 1;
-          if (completedSinceSave >= PARTIAL_SAVE_EVERY) {
-            completedSinceSave = 0;
-            void persistPartial(false);
-          }
-        },
-      });
-    }
-
-    const snapshot = buildSnapshot(
-      symbols,
-      resultsBySymbol,
-      fallbackBySymbol,
-      configKey,
-      sources,
-      tradingViewWatchlistName,
-      true,
-      previousCompletedAt,
-    );
-
-    await saveSnapshot(snapshot);
-    setScanError(null);
-    return snapshot;
+    return await mergeScanResults(overrides, { rescanAll: options.force === true });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Background scan failed";
     setScanError(message);
@@ -243,9 +289,78 @@ export async function runBackgroundScan(
   }
 }
 
+/** Scan a slice of the symbol universe — for chunked cron on Vercel Hobby (300s limit). */
+export async function runScanChunk(
+  offset: number,
+  limit: number,
+  overrides: Partial<ScanJobConfig> = {},
+): Promise<ScanSnapshot | null> {
+  const acquired = await tryAcquireScanLock();
+  if (!acquired) return null;
+
+  try {
+    const config = resolveScanJobConfig(overrides);
+    const { symbols } = await buildSymbolUniverse({
+      includeBlueChips: config.includeBlueChips,
+      watchlistText: config.watchlistText,
+      customSymbols: config.customSymbols,
+      tradingViewWatchlistUrl: config.tradingViewWatchlistUrl,
+    });
+
+    const slice = new Set(
+      symbols.slice(offset, offset + limit).map((parsed) => parsed.yahoo),
+    );
+
+    return await mergeScanResults(overrides, {
+      symbolFilter: (parsed) => slice.has(parsed.yahoo),
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Chunk scan failed";
+    setScanError(message);
+    throw err;
+  } finally {
+    await releaseScanLock();
+  }
+}
+
 let retryInFlight = false;
 
-/** Re-scan only symbols with chart fetch errors; merge into cached snapshot. */
+/** Synchronous retry of failed/missing symbols — used by /api/scan/retry-failed. */
+export async function retryFailedSymbols(
+  overrides: Partial<ScanJobConfig> = {},
+  options: { maxSymbols?: number } = {},
+): Promise<ScanSnapshot | null> {
+  const maxSymbols = options.maxSymbols ?? DEFAULT_RETRY_BATCH;
+  const snapshot = await loadSnapshot();
+  if (!snapshot?.results?.length) return null;
+
+  const config = resolveScanJobConfig(overrides);
+  const configKey = buildConfigKey(config);
+  if (snapshot.configKey !== configKey) return null;
+
+  const failedSet = new Set(
+    snapshot.results.filter(isRetryableResult).map((row) => row.symbol),
+  );
+  if (failedSet.size === 0) return snapshot;
+
+  const acquired = await tryAcquireScanLock();
+  if (!acquired) return null;
+
+  try {
+    return await mergeScanResults(overrides, {
+      symbolFilter: (parsed) => failedSet.has(parsed.yahoo),
+      maxSymbols,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Retry failed";
+    setScanError(message);
+    throw err;
+  } finally {
+    await releaseScanLock();
+  }
+}
+
+/** Re-scan failed symbols in the background (fire-and-forget). */
 export async function retryFailedSymbolsInBackground(
   overrides: Partial<ScanJobConfig> = {},
 ): Promise<boolean> {
@@ -253,63 +368,15 @@ export async function retryFailedSymbolsInBackground(
 
   const snapshot = await loadSnapshot();
   if (!snapshot?.results?.length) return false;
-
-  const config = resolveScanJobConfig(overrides);
-  const configKey = buildConfigKey(config);
-  if (snapshot.configKey !== configKey) return false;
-
-  const failed = snapshot.results.filter(isChartFetchError);
-  if (failed.length === 0) return false;
-
-  const acquired = await tryAcquireScanLock();
-  if (!acquired) return false;
+  if (countRetryableResults(snapshot.results) === 0) return false;
 
   retryInFlight = true;
 
-  void (async () => {
-    try {
-      const { symbols, sources, tradingViewWatchlistName } =
-        await buildSymbolUniverse({
-          includeBlueChips: config.includeBlueChips,
-          watchlistText: config.watchlistText,
-          customSymbols: config.customSymbols,
-          tradingViewWatchlistUrl: config.tradingViewWatchlistUrl,
-        });
-
-      const failedSet = new Set(failed.map((row) => row.symbol));
-      const toRetry = symbols.filter((parsed) => failedSet.has(parsed.yahoo));
-      if (toRetry.length === 0) return;
-
-      const bySymbol = new Map(snapshot.results.map((row) => [row.symbol, row]));
-      const retried = await scanSymbols(toRetry, config.historyDays);
-
-      for (const row of retried) {
-        if (!row.error || row.ema20 != null) {
-          bySymbol.set(row.symbol, row);
-        }
-      }
-
-      const ordered = symbols.map((parsed) => bySymbol.get(parsed.yahoo)!);
-      const now = new Date().toISOString();
-
-      await saveSnapshot({
-        ...snapshot,
-        scannedAt: now,
-        lastSavedAt: now,
-        completedAt: now,
-        symbolCount: ordered.length,
-        results: sortByRecentCrossover(ordered),
-        sources,
-        tradingViewWatchlistName,
-        scanComplete: true,
-      });
-    } catch {
-      // best-effort background retry
-    } finally {
+  void retryFailedSymbols(overrides, { maxSymbols: DEFAULT_RETRY_BATCH })
+    .catch(() => undefined)
+    .finally(() => {
       retryInFlight = false;
-      await releaseScanLock();
-    }
-  })();
+    });
 
   return true;
 }
@@ -324,9 +391,16 @@ export async function ensureFreshScan(
   const configKey = buildConfigKey(config);
   const configMismatch = snapshot != null && snapshot.configKey !== configKey;
   const incomplete = snapshot != null && snapshot.scanComplete === false;
+  const hasRetryable =
+    snapshot != null && countRetryableResults(snapshot.results) > 0;
   const stale = isSnapshotStale(snapshot) || configMismatch || incomplete;
 
-  if (!options.force && snapshot && !stale) return false;
+  if (!options.force && snapshot && !stale) {
+    if (hasRetryable) {
+      void retryFailedSymbolsInBackground(overrides);
+    }
+    return false;
+  }
 
   void runBackgroundScan(overrides, options).catch(() => undefined);
   return true;
@@ -341,6 +415,9 @@ export async function getScanStatus() {
     completedAt: snapshot?.completedAt ?? null,
     symbolCount: snapshot?.symbolCount ?? 0,
     scanComplete: snapshot?.scanComplete !== false,
+    retryableCount: snapshot ? countRetryableResults(snapshot.results) : 0,
     staleAfterMs: getStaleAfterMs(),
   };
 }
+
+export { isChartFetchError };

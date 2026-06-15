@@ -8,13 +8,14 @@ import {
   type ScanSnapshot,
 } from "@/lib/scan-cache";
 import {
+  countRetryableResults,
   ensureFreshScan,
   retryFailedSymbolsInBackground,
   runBackgroundScan,
 } from "@/lib/scan-job";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 800;
+export const maxDuration = 300;
 
 function parseForce(searchParams: URLSearchParams): boolean {
   return searchParams.get("force") === "true";
@@ -65,7 +66,8 @@ export async function GET(request: NextRequest) {
     void ensureFreshScan({});
   } else if (
     !status.scanInProgress &&
-    snapshot?.results?.some((row) => row.error)
+    snapshot &&
+    countRetryableResults(snapshot.results) > 0
   ) {
     void retryFailedSymbolsInBackground({});
   }

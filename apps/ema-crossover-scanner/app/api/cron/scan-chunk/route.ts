@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { runBackgroundScan } from "@/lib/scan-job";
+import { runScanChunk } from "@/lib/scan-job";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -17,24 +17,33 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  const { searchParams } = request.nextUrl;
+  const offset = Math.max(0, Number(searchParams.get("offset") ?? 0));
+  const limit = Math.min(100, Math.max(1, Number(searchParams.get("limit") ?? 80)));
+
   try {
-    const snapshot = await runBackgroundScan();
+    const snapshot = await runScanChunk(offset, limit);
     if (!snapshot) {
       return NextResponse.json({
         ok: true,
         skipped: true,
         reason: "Scan already in progress",
+        offset,
+        limit,
       });
     }
 
     return NextResponse.json({
       ok: true,
+      offset,
+      limit,
       scannedAt: snapshot.scannedAt,
       symbolCount: snapshot.symbolCount,
+      scanComplete: snapshot.scanComplete,
     });
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Cron scan failed";
-    return NextResponse.json({ error: message }, { status: 500 });
+    const message = err instanceof Error ? err.message : "Chunk scan failed";
+    return NextResponse.json({ error: message, offset, limit }, { status: 500 });
   }
 }
 

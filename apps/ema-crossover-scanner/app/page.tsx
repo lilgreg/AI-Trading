@@ -240,6 +240,8 @@ function sortIndicator(active: boolean, dir: SortDir): string {
 
 const STATUS_POLL_MS = 60_000;
 const QUOTES_POLL_MS = 45_000;
+const RETRY_FAILED_THRESHOLD = 10;
+const RETRY_POLL_MS = 45_000;
 const NEWS_POLL_MS = Number(process.env.NEXT_PUBLIC_NEWS_POLL_MS ?? 20_000);
 const SCAN_POLL_MS = 30_000;
 const NEWS_POLL_LABEL_SEC = Math.round(NEWS_POLL_MS / 1000);
@@ -327,6 +329,7 @@ export default function HomePage() {
   const [data, setData] = useState<CachedScanResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [rescanning, setRescanning] = useState(false);
+  const [retryingFailed, setRetryingFailed] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [onlyAbove, setOnlyAbove] = useState(false);
   const [sortKey, setSortKey] = useState<SortKey>("cross4h");
@@ -343,6 +346,7 @@ export default function HomePage() {
     null,
   );
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const retryPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const statusPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const quotesPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const newsPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -387,6 +391,32 @@ export default function HomePage() {
       setError(err instanceof Error ? err.message : "Rescan failed");
     } finally {
       setRescanning(false);
+    }
+  }, []);
+
+  const retryFailedScan = useCallback(async (options?: { quiet?: boolean }) => {
+    if (!options?.quiet) setRetryingFailed(true);
+    try {
+      const res = await fetch("/api/scan/retry-failed", {
+        method: "POST",
+        cache: "no-store",
+      });
+      if (!res.ok) return;
+
+      const json = normalizeCachedResponse(
+        (await res.json()) as Partial<CachedScanResponse> & {
+          retryableRemaining?: number;
+        },
+      );
+      setData(json);
+
+      if ((json.results?.filter((r) => r.error).length ?? 0) <= RETRY_FAILED_THRESHOLD) {
+        setRetryingFailed(false);
+      }
+    } catch {
+      // ignore background retry errors
+    } finally {
+      if (!options?.quiet) setRetryingFailed(false);
     }
   }, []);
 
@@ -546,6 +576,30 @@ export default function HomePage() {
       if (pollRef.current) clearInterval(pollRef.current);
     };
   }, [data?.scanInProgress, fetchCache]);
+
+  const errorCount = useMemo(
+    () => data?.results?.filter((r) => r.error).length ?? 0,
+    [data?.results],
+  );
+
+  useEffect(() => {
+    if (retryPollRef.current) clearInterval(retryPollRef.current);
+    if (!data || data.cacheEmpty || data.scanInProgress) return;
+    if (errorCount <= RETRY_FAILED_THRESHOLD) {
+      setRetryingFailed(false);
+      return;
+    }
+
+    setRetryingFailed(true);
+    void retryFailedScan({ quiet: true });
+    retryPollRef.current = setInterval(() => {
+      void retryFailedScan({ quiet: true });
+    }, RETRY_POLL_MS);
+
+    return () => {
+      if (retryPollRef.current) clearInterval(retryPollRef.current);
+    };
+  }, [data?.cacheEmpty, data?.scanInProgress, errorCount, retryFailedScan]);
 
   useLayoutEffect(() => {
     const el = newsBarRef.current;
@@ -750,6 +804,11 @@ export default function HomePage() {
           )}
           {data?.scanInProgress && (
             <span className="ml-2 text-[var(--accent)]">Updating…</span>
+          )}
+          {retryingFailed && !data?.scanInProgress && (
+            <span className="ml-2 text-[var(--accent)]">
+              · Retrying failed symbols…
+            </span>
           )}
           {quotesLive && !data?.cacheEmpty && (
             <span className="ml-2 text-[var(--green)]">· Prices updating live</span>

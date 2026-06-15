@@ -384,14 +384,25 @@ table.scan-table tbody tr:hover {
 .news-modal-summary {
   display: block;
   margin: 0;
-  min-height: 100%;
+  min-height: 60vh;
+  max-height: 80vh;
   font-size: 0.9375rem;
   line-height: 1.65;
   color: var(--text);
   white-space: pre-wrap;
-  overflow: visible;
+  overflow-y: auto;
+  overflow-x: hidden;
   -webkit-line-clamp: unset;
+  -webkit-box-orient: unset;
+  word-break: break-word;
   transition: opacity 0.2s ease;
+}
+
+.news-modal-summary-empty {
+  margin: 0;
+  font-size: 0.9375rem;
+  line-height: 1.65;
+  color: var(--muted);
 }
 
 .news-modal-summary-pending {
