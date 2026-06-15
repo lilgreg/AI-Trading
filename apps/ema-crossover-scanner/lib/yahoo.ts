@@ -10,7 +10,24 @@ export function aggregateHourlyTo4h(bars: OhlcBar[]): OhlcBar[] {
 
   for (const bar of bars) {
     const bucketStart = getNyFourHourBucketStart(bar.date.getTime());
-    buckets.set(bucketStart, { date: new Date(bucketStart), close: bar.close });
+    const high = bar.high ?? bar.close;
+    const low = bar.low ?? bar.close;
+    const open = bar.open ?? bar.close;
+    const existing = buckets.get(bucketStart);
+
+    if (!existing) {
+      buckets.set(bucketStart, {
+        date: new Date(bucketStart),
+        open,
+        high,
+        low,
+        close: bar.close,
+      });
+    } else {
+      existing.high = Math.max(existing.high ?? existing.close, high);
+      existing.low = Math.min(existing.low ?? existing.close, low);
+      existing.close = bar.close;
+    }
   }
 
   return [...buckets.values()].sort((a, b) => a.date.getTime() - b.date.getTime());
@@ -88,11 +105,7 @@ function formatNyHour(utcMs: number): {
   };
 }
 
-export async function fetchHistoricalBars(
-  symbol: string,
-  days: number,
-  interval: ScanInterval,
-): Promise<OhlcBar[]> {
+export async function fetchHourlyBars(symbol: string, days: number): Promise<OhlcBar[]> {
   const end = new Date();
   const start = new Date();
   start.setDate(start.getDate() - days - 14);
@@ -103,14 +116,24 @@ export async function fetchHistoricalBars(
     interval: "1h",
   });
 
-  const hourly = (chart.quotes ?? [])
+  return (chart.quotes ?? [])
     .filter((row) => row.date && row.close != null)
     .map((row) => ({
       date: row.date as Date,
+      open: row.open ?? undefined,
+      high: row.high ?? undefined,
+      low: row.low ?? undefined,
       close: row.close as number,
     }))
     .sort((a, b) => a.date.getTime() - b.date.getTime());
+}
 
+export async function fetchHistoricalBars(
+  symbol: string,
+  days: number,
+  interval: ScanInterval,
+): Promise<OhlcBar[]> {
+  const hourly = await fetchHourlyBars(symbol, days);
   if (interval === "1h") return hourly;
   return aggregateHourlyTo4h(hourly);
 }
@@ -119,6 +142,11 @@ export interface QuoteSessionChanges {
   preMarketChange: number | null;
   regularMarketChange: number | null;
   postMarketChange: number | null;
+}
+
+function percentChange(current: number, base: number): number | null {
+  if (base === 0) return null;
+  return ((current - base) / base) * 100;
 }
 
 function computeSessionChanges(quote: Record<string, unknown>): QuoteSessionChanges {
@@ -133,22 +161,22 @@ function computeSessionChanges(quote: Record<string, unknown>): QuoteSessionChan
   const postMarketPrice = num("postMarketPrice");
 
   const preMarketChange =
-    num("preMarketChange") ??
+    num("preMarketChangePercent") ??
     (preMarketPrice != null && previousClose != null
-      ? preMarketPrice - previousClose
+      ? percentChange(preMarketPrice, previousClose)
       : null);
 
   const regularMarketChange =
-    num("regularMarketChange") ??
+    num("regularMarketChangePercent") ??
     (regularMarketPrice != null && previousClose != null
-      ? regularMarketPrice - previousClose
+      ? percentChange(regularMarketPrice, previousClose)
       : null);
 
   const regularClose = regularMarketPrice ?? null;
   const postMarketChange =
-    num("postMarketChange") ??
+    num("postMarketChangePercent") ??
     (postMarketPrice != null && regularClose != null
-      ? postMarketPrice - regularClose
+      ? percentChange(postMarketPrice, regularClose)
       : null);
 
   return { preMarketChange, regularMarketChange, postMarketChange };

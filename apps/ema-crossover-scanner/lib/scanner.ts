@@ -4,12 +4,17 @@ import {
   latestEmaValues,
 } from "./ema";
 import type { ScanInterval } from "./intervals";
+import { evaluateAllPatterns, NONE_PATTERNS } from "./patterns";
 import {
   resolveTradingViewSymbol,
   tradingViewChartUrl,
 } from "./stocks";
 import type { ParsedSymbol, StockScanResult } from "./types";
-import { fetchHistoricalBars, fetchQuoteMeta } from "./yahoo";
+import {
+  aggregateHourlyTo4h,
+  fetchHourlyBars,
+  fetchQuoteMeta,
+} from "./yahoo";
 
 const FAST_EMA = 20;
 const SLOW_EMA = 50;
@@ -35,6 +40,7 @@ export async function scanSymbol(
     preMarketChange: null,
     regularMarketChange: null,
     postMarketChange: null,
+    patterns: NONE_PATTERNS,
     ema20: null,
     ema50: null,
     ema20Above50: false,
@@ -46,10 +52,12 @@ export async function scanSymbol(
   };
 
   try {
-    const [bars, meta] = await Promise.all([
-      fetchHistoricalBars(parsed.yahoo, historyDays, interval),
+    const [hourly, meta] = await Promise.all([
+      fetchHourlyBars(parsed.yahoo, historyDays),
       fetchQuoteMeta(parsed.yahoo),
     ]);
+    const bars = interval === "1h" ? hourly : aggregateHourlyTo4h(hourly);
+    const bars4h = aggregateHourlyTo4h(hourly);
 
     const resolvedTv = resolveTradingViewSymbol(parsed, meta.quoteExchange);
     base.displayTicker = resolvedTv.includes(":")
@@ -88,6 +96,8 @@ export async function scanSymbol(
       crossoverDaysAgo = Math.round(crossover.msAgo / (1000 * 60 * 60 * 24));
     }
 
+    const patterns = evaluateAllPatterns(hourly, bars4h, meta.price);
+
     return {
       ...base,
       ...meta,
@@ -99,6 +109,7 @@ export async function scanSymbol(
       crossoverTime,
       crossoverMsAgo,
       crossoverDaysAgo,
+      patterns,
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to fetch data";

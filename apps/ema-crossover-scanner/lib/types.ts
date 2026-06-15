@@ -1,3 +1,16 @@
+export type PatternStatus = "Active" | "Failed" | "Completed" | "None";
+export type PatternTimeframe = "1h" | "4h" | "1h+4h" | "None";
+
+export interface PatternDetection {
+  status: PatternStatus;
+  timeframes: PatternTimeframe;
+}
+
+export interface SymbolPatterns {
+  doubleBottom: PatternDetection;
+  inverseHeadShoulders: PatternDetection;
+}
+
 export interface StockScanResult {
   symbol: string;
   /** Ticker only for UI (e.g. JNJ) */
@@ -8,12 +21,14 @@ export interface StockScanResult {
   name: string | null;
   exchange: string | null;
   price: number | null;
-  /** Pre-market $ change vs previous close (Yahoo quote) */
+  /** Pre-market % change vs previous close (Yahoo quote) */
   preMarketChange: number | null;
-  /** Regular session $ change vs previous close (Yahoo quote) */
+  /** Regular session % change vs previous close (Yahoo quote) */
   regularMarketChange: number | null;
-  /** After-hours $ change vs regular close (Yahoo quote) */
+  /** After-hours % change vs regular close (Yahoo quote) */
   postMarketChange: number | null;
+  /** Double-bottom and inverse H&S on 1h / 4h bars */
+  patterns: SymbolPatterns;
   ema20: number | null;
   ema50: number | null;
   ema20Above50: boolean;

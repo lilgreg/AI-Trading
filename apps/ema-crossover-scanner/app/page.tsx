@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { formatMsAgo } from "@/lib/ema";
 import type { ScanInterval } from "@/lib/intervals";
+import type { PatternDetection } from "@/lib/types";
 import type { ScanResponse, StockScanResult } from "@/lib/types";
 
 function formatPrice(value: number | null): string {
@@ -28,9 +29,8 @@ function changeColorClass(value: number | null): string {
 
 function formatSessionChange(value: number | null): string {
   if (value == null) return "—";
-  const sign = value > 0 ? "+" : value < 0 ? "-" : "";
-  const abs = Math.abs(value);
-  return `${sign}$${abs.toFixed(2)}`;
+  const sign = value > 0 ? "+" : "";
+  return `${sign}${value.toFixed(2)}%`;
 }
 
 function SessionChangesCell({ row }: { row: StockScanResult }) {
@@ -52,6 +52,42 @@ function SessionChangesCell({ row }: { row: StockScanResult }) {
           <span className="w-7 shrink-0 text-[var(--muted)]">{label}</span>
           <span className={`mono ${changeColorClass(value)}`}>
             {formatSessionChange(value)}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function patternBadgeClass(status: PatternDetection["status"]): string {
+  if (status === "Active") return "badge-amber";
+  if (status === "Completed") return "badge-green";
+  if (status === "Failed") return "badge-red";
+  return "badge-muted";
+}
+
+function formatPatternLine(prefix: string, pattern: PatternDetection): string {
+  if (pattern.status === "None") return `${prefix}: None`;
+  if (pattern.timeframes === "None") return `${prefix}: ${pattern.status}`;
+  return `${prefix}: ${pattern.status} (${pattern.timeframes})`;
+}
+
+function PatternsCell({ patterns }: { patterns: StockScanResult["patterns"] }) {
+  const lines = [
+    { key: "db", text: formatPatternLine("DB", patterns.doubleBottom), status: patterns.doubleBottom.status },
+    {
+      key: "ihs",
+      text: formatPatternLine("IH&S", patterns.inverseHeadShoulders),
+      status: patterns.inverseHeadShoulders.status,
+    },
+  ];
+
+  return (
+    <div className="space-y-1 text-xs leading-tight">
+      {lines.map(({ key, text, status }) => (
+        <div key={key}>
+          <span className={`${patternBadgeClass(status)} inline-block rounded-full px-2 py-0.5`}>
+            {text}
           </span>
         </div>
       ))}
@@ -285,6 +321,7 @@ export default function HomePage() {
                 <th>Name</th>
                 <th>Price</th>
                 <th>Session Δ</th>
+                <th>Patterns</th>
                 <th>20 EMA</th>
                 <th>50 EMA</th>
                 <th>Status</th>
@@ -294,7 +331,7 @@ export default function HomePage() {
             <tbody>
               {loading && !data ? (
                 <tr>
-                  <td colSpan={9} className="py-12 text-center text-[var(--muted)]">
+                  <td colSpan={10} className="py-12 text-center text-[var(--muted)]">
                     Fetching market data and computing EMAs…
                   </td>
                 </tr>
@@ -318,6 +355,9 @@ export default function HomePage() {
                     <td className="mono">{formatPrice(row.price)}</td>
                     <td>
                       <SessionChangesCell row={row} />
+                    </td>
+                    <td>
+                      <PatternsCell patterns={row.patterns} />
                     </td>
                     <td className="mono">{formatEma(row.ema20)}</td>
                     <td className="mono">{formatEma(row.ema50)}</td>
