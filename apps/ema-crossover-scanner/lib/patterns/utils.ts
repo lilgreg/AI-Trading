@@ -304,6 +304,7 @@ export function evaluateBullishPatternStatus(
     if (currentPrice >= target * 0.98) {
       return { status: "Target", confirmMsAgo, levels: pattern };
     }
+    targetHitIdx = null;
   }
 
   if (failedIdx != null && isWithinRecency(bars, failedIdx)) {
@@ -340,13 +341,11 @@ export function evaluateBearishPatternStatus(
   options: {
     minBarsAfterConfirm?: number;
     maxBarsAfterConfirm?: number;
-    requireBreakdownForActive?: boolean;
   } = {},
 ): PatternEvalResult {
   const {
     minBarsAfterConfirm = 3,
     maxBarsAfterConfirm = 50,
-    requireBreakdownForActive = false,
   } = options;
   const { confirmIdx, resistance, neckline, target } = pattern;
 

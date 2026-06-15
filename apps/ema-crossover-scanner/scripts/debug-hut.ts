@@ -61,7 +61,7 @@ async function main() {
         pattern,
         meta.price!,
         params.maxRecencyBars,
-        { minBarsAfterConfirm: 3, maxBarsAfterConfirm: 42, requireBreakdownForActive: false },
+        { minBarsAfterConfirm: 3, maxBarsAfterConfirm: 42 },
       );
 
       console.log({

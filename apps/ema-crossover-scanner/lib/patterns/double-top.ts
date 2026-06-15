@@ -110,7 +110,6 @@ export function detectDoubleTop(
   const evalOptions = {
     minBarsAfterConfirm: 3,
     maxBarsAfterConfirm: tf === "4h" ? 32 : 42,
-    requireBreakdownForActive: true,
   };
 
   for (const pattern of findPatternCandidates(bars, tf)) {
