@@ -1,6 +1,7 @@
 import type { OhlcBar } from "../ema";
 import { detectDoubleBottom } from "./double-bottom";
 import { detectDoubleTop } from "./double-top";
+import { detectHeadShoulders } from "./head-shoulders";
 import { detectInverseHeadShoulders } from "./inverse-head-shoulders";
 import type { BarTimeframe, PatternDetection } from "./types";
 import { NONE_PATTERN } from "./types";
@@ -20,12 +21,14 @@ export { RECENCY_DAYS, patternSortKey } from "./utils";
 export interface SymbolPatterns {
   doubleBottom: PatternDetection;
   doubleTop: PatternDetection;
+  headShoulders: PatternDetection;
   inverseHeadShoulders: PatternDetection;
 }
 
 export const NONE_PATTERNS: SymbolPatterns = {
   doubleBottom: NONE_PATTERN,
   doubleTop: NONE_PATTERN,
+  headShoulders: NONE_PATTERN,
   inverseHeadShoulders: NONE_PATTERN,
 };
 
@@ -66,6 +69,13 @@ export function evaluateAllPatterns(
     ),
     doubleTop: evaluateOnTimeframes(
       detectDoubleTop,
+      recent1h,
+      recent4h,
+      currentPrice,
+      includeDebug,
+    ),
+    headShoulders: evaluateOnTimeframes(
+      detectHeadShoulders,
       recent1h,
       recent4h,
       currentPrice,

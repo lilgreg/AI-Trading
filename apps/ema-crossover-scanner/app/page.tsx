@@ -96,8 +96,13 @@ function PatternsCell({ patterns }: { patterns: StockScanResult["patterns"] }) {
       status: patterns.doubleTop.status,
     },
     {
+      key: "hs",
+      text: formatPatternLabel("HS", patterns.headShoulders),
+      status: patterns.headShoulders.status,
+    },
+    {
       key: "ihs",
-      text: formatPatternLabel("IH&S", patterns.inverseHeadShoulders),
+      text: formatPatternLabel("IHS", patterns.inverseHeadShoulders),
       status: patterns.inverseHeadShoulders.status,
     },
   ].filter((line) => line.text != null);
@@ -132,7 +137,8 @@ function CrossoverCell({
     return <span className="text-[var(--red)] text-xs">{error}</span>;
   }
 
-  if (!cross.crossoverDate) {
+  const iso = cross.crossoverAt ?? null;
+  if (!iso) {
     return (
       <span className="badge-muted inline-block rounded-full px-2 py-0.5 text-xs">
         No cross in window
@@ -140,12 +146,14 @@ function CrossoverCell({
     );
   }
 
+  const when = new Date(iso);
+  const dateStr = when.toLocaleDateString(undefined, { dateStyle: "short" });
+  const timeStr = when.toLocaleTimeString(undefined, { timeStyle: "short" });
+
   return (
     <div>
-      <div className="font-medium">{cross.crossoverDate}</div>
-      {cross.crossoverTime && (
-        <div className="text-sm text-[var(--text)]">{cross.crossoverTime}</div>
-      )}
+      <div className="font-medium">{dateStr}</div>
+      <div className="text-sm text-[var(--text)]">{timeStr}</div>
       <div className="text-xs text-[var(--muted)]">
         {cross.crossoverMsAgo != null
           ? formatMsAgo(cross.crossoverMsAgo)
@@ -159,6 +167,7 @@ function rowPatternSortKey(patterns: SymbolPatterns): number {
   return Math.min(
     patternSortKey(patterns.doubleBottom),
     patternSortKey(patterns.doubleTop),
+    patternSortKey(patterns.headShoulders),
     patternSortKey(patterns.inverseHeadShoulders),
   );
 }
@@ -301,8 +310,8 @@ export default function HomePage() {
     const rows = filteredResults;
     return {
       above: rows.filter((r) => r.ema20Above50 && !r.error).length,
-      withCross1h: rows.filter((r) => r.cross1h.crossoverDate && !r.error).length,
-      withCross4h: rows.filter((r) => r.cross4h.crossoverDate && !r.error).length,
+      withCross1h: rows.filter((r) => r.cross1h.crossoverAt && !r.error).length,
+      withCross4h: rows.filter((r) => r.cross4h.crossoverAt && !r.error).length,
       errors: rows.filter((r) => r.error).length,
       total: data?.symbolCount ?? rows.length,
     };
@@ -320,9 +329,8 @@ export default function HomePage() {
           20 EMA × 50 EMA Crossover Rank
         </h1>
         <p className="mt-2 max-w-2xl text-[var(--muted)]">
-          Precomputed server scan — opens instantly from cache. Cross columns show
-          1h and 4h independently. Symbol universe comes from env (TradingView
-          watchlist + blue chips); refreshed on a cron schedule.
+          Precomputed server scan — opens instantly from cache. Cross 4h and Cross 1h
+          columns show each timeframe independently (times in your local timezone).
         </p>
       </header>
 
@@ -433,17 +441,17 @@ export default function HomePage() {
                 <th>Status (4h)</th>
                 <th
                   className="sortable"
-                  onClick={() => handleSort("cross1h")}
-                  aria-sort={ariaSortValue("cross1h", sortKey, sortDir)}
-                >
-                  Cross 1h{sortIndicator(sortKey === "cross1h", sortDir)}
-                </th>
-                <th
-                  className="sortable"
                   onClick={() => handleSort("cross4h")}
                   aria-sort={ariaSortValue("cross4h", sortKey, sortDir)}
                 >
                   Cross 4h{sortIndicator(sortKey === "cross4h", sortDir)}
+                </th>
+                <th
+                  className="sortable"
+                  onClick={() => handleSort("cross1h")}
+                  aria-sort={ariaSortValue("cross1h", sortKey, sortDir)}
+                >
+                  Cross 1h{sortIndicator(sortKey === "cross1h", sortDir)}
                 </th>
               </tr>
             </thead>
@@ -509,10 +517,10 @@ export default function HomePage() {
                       )}
                     </td>
                     <td>
-                      <CrossoverCell cross={row.cross1h} error={row.error} />
+                      <CrossoverCell cross={row.cross4h} error={row.error} />
                     </td>
                     <td>
-                      <CrossoverCell cross={row.cross4h} error={row.error} />
+                      <CrossoverCell cross={row.cross1h} error={row.error} />
                     </td>
                   </tr>
                 ))

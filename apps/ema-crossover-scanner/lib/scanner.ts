@@ -9,11 +9,8 @@ import {
   resolveTradingViewSymbol,
   tradingViewChartUrl,
 } from "./stocks";
-import type {
-  CrossoverDisplay,
-  ParsedSymbol,
-  StockScanResult,
-} from "./types";
+import type { CrossoverDisplay, ParsedSymbol, StockScanResult } from "./types";
+import { EMPTY_CROSSOVER } from "./types";
 import {
   aggregateHourlyTo4h,
   fetchHourlyBars,
@@ -27,10 +24,16 @@ export const SCAN_BATCH_SIZE = 14;
 
 function buildCrossoverDisplay(cross: CrossoverInfo | null): CrossoverDisplay {
   if (!cross) {
-    return { crossoverDate: null, crossoverTime: null, crossoverMsAgo: null };
+    return {
+      crossoverAt: null,
+      crossoverDate: null,
+      crossoverTime: null,
+      crossoverMsAgo: null,
+    };
   }
   const formatted = formatCrossoverDateTime(cross.date);
   return {
+    crossoverAt: cross.date.toISOString(),
     crossoverDate: formatted.crossoverDate,
     crossoverTime: formatted.crossoverTime,
     crossoverMsAgo: cross.msAgo,
@@ -62,8 +65,8 @@ export async function scanSymbol(
     ema20: null,
     ema50: null,
     ema20Above50: false,
-    cross1h: { crossoverDate: null, crossoverTime: null, crossoverMsAgo: null },
-    cross4h: { crossoverDate: null, crossoverTime: null, crossoverMsAgo: null },
+    cross1h: { ...EMPTY_CROSSOVER },
+    cross4h: { ...EMPTY_CROSSOVER },
     tradingViewUrl: tradingViewChartUrl(tvSymbol, "4h"),
   };
 

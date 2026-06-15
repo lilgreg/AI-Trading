@@ -20,16 +20,22 @@ export interface PatternDetection {
 export interface SymbolPatterns {
   doubleBottom: PatternDetection;
   doubleTop: PatternDetection;
+  headShoulders: PatternDetection;
   inverseHeadShoulders: PatternDetection;
 }
 
 export interface CrossoverDisplay {
+  /** ISO 8601 — format in browser for viewer local timezone */
+  crossoverAt: string | null;
+  /** @deprecated Use crossoverAt formatted client-side */
   crossoverDate: string | null;
+  /** @deprecated Use crossoverAt formatted client-side */
   crossoverTime: string | null;
   crossoverMsAgo: number | null;
 }
 
 export const EMPTY_CROSSOVER: CrossoverDisplay = {
+  crossoverAt: null,
   crossoverDate: null,
   crossoverTime: null,
   crossoverMsAgo: null,

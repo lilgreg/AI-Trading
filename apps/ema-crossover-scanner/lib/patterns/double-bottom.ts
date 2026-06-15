@@ -10,13 +10,15 @@ import {
   resolveCurrentPrice,
 } from "./utils";
 
-function findMostRecentPattern(
+function findPatternCandidates(
   bars: OhlcBar[],
   tf: BarTimeframe,
-): BullishPatternLevels | null {
+): BullishPatternLevels[] {
   const params = getBullishParams(tf);
   const swingLows = findSwingLowIndices(bars, params.swingWindow);
-  if (swingLows.length < 2) return null;
+  if (swingLows.length < 2) return [];
+
+  const candidates: BullishPatternLevels[] = [];
 
   for (let s = swingLows.length - 1; s >= 1; s--) {
     const secondLowIdx = swingLows[s];
@@ -37,6 +39,18 @@ function findMostRecentPattern(
         continue;
       }
 
+      const support = Math.min(firstLow, secondLow);
+
+      // W-bottom: no bar between the two lows may dip below support.
+      let hasLowerMidLow = false;
+      for (let i = firstLowIdx + 1; i < secondLowIdx; i++) {
+        if (barLow(bars[i]) < support * 0.995) {
+          hasLowerMidLow = true;
+          break;
+        }
+      }
+      if (hasLowerMidLow) continue;
+
       let neckline = -Infinity;
       let peakIdx = -1;
       for (let i = firstLowIdx + 1; i < secondLowIdx; i++) {
@@ -48,11 +62,10 @@ function findMostRecentPattern(
       }
       if (!Number.isFinite(neckline) || peakIdx < 0) continue;
 
-      const support = Math.min(firstLow, secondLow);
       const lift = (neckline - support) / support;
       if (lift < params.minNecklineLift) continue;
 
-      // Peak between lows must be a swing high (clear V-shape).
+      // Peak between lows must be a swing high (clear W-shape, not drift).
       const peakWindow = params.swingWindow;
       let peakIsSwing = true;
       for (let j = 1; j <= peakWindow; j++) {
@@ -69,16 +82,16 @@ function findMostRecentPattern(
       if (!peakIsSwing) continue;
 
       const target = neckline + (neckline - support);
-      return {
+      candidates.push({
         confirmIdx: secondLowIdx,
         support,
         neckline,
         target,
-      };
+      });
     }
   }
 
-  return null;
+  return candidates;
 }
 
 export function detectDoubleBottom(
@@ -94,18 +107,26 @@ export function detectDoubleBottom(
   const price = resolveCurrentPrice(bars, currentPrice);
   if (price == null) return { status: "None", confirmMsAgo: null };
 
-  const pattern = findMostRecentPattern(bars, tf);
-  if (!pattern) return { status: "None", confirmMsAgo: null };
+  const evalOptions = {
+    showTarget: true,
+    requireNecklineBreakout: true,
+    minAboveNeckline: 1.002,
+    minBarsAfterConfirm: 3,
+    maxBarsAfterConfirm: tf === "4h" ? 32 : 42,
+  };
 
-  return evaluateBullishPatternStatus(
-    bars,
-    pattern,
-    price,
-    params.maxRecencyBars,
-    {
-      showTarget: true,
-      minBarsAfterConfirm: 3,
-      maxBarsAfterConfirm: tf === "4h" ? 32 : 42,
-    },
-  );
+  for (const pattern of findPatternCandidates(bars, tf)) {
+    const result = evaluateBullishPatternStatus(
+      bars,
+      pattern,
+      price,
+      params.maxRecencyBars,
+      evalOptions,
+    );
+    if (result.status === "Active") {
+      return result;
+    }
+  }
+
+  return { status: "None", confirmMsAgo: null };
 }

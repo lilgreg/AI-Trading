@@ -10,13 +10,15 @@ import {
   resolveCurrentPrice,
 } from "./utils";
 
-function findMostRecentPattern(
+function findPatternCandidates(
   bars: OhlcBar[],
   tf: BarTimeframe,
-): BearishPatternLevels | null {
+): BearishPatternLevels[] {
   const params = getBearishParams(tf);
   const swingHighs = findSwingHighIndices(bars, params.swingWindow);
-  if (swingHighs.length < 2) return null;
+  if (swingHighs.length < 2) return [];
+
+  const candidates: BearishPatternLevels[] = [];
 
   for (let s = swingHighs.length - 1; s >= 1; s--) {
     const secondHighIdx = swingHighs[s];
@@ -37,6 +39,18 @@ function findMostRecentPattern(
         continue;
       }
 
+      const resistance = Math.max(firstHigh, secondHigh);
+
+      // M-top: no bar between the two highs may exceed resistance (distinguishes from H&S / spikes).
+      let hasHigherMidPeak = false;
+      for (let i = firstHighIdx + 1; i < secondHighIdx; i++) {
+        if (barHigh(bars[i]) > resistance * 1.005) {
+          hasHigherMidPeak = true;
+          break;
+        }
+      }
+      if (hasHigherMidPeak) continue;
+
       let neckline = Infinity;
       let troughIdx = -1;
       for (let i = firstHighIdx + 1; i < secondHighIdx; i++) {
@@ -48,10 +62,10 @@ function findMostRecentPattern(
       }
       if (!Number.isFinite(neckline) || troughIdx < 0) continue;
 
-      const resistance = Math.max(firstHigh, secondHigh);
       const drop = (resistance - neckline) / resistance;
       if (drop < params.minNecklineDrop) continue;
 
+      // Trough between highs must be a swing low (clear M-shape).
       const troughWindow = params.swingWindow;
       let troughIsSwing = true;
       for (let j = 1; j <= troughWindow; j++) {
@@ -68,16 +82,16 @@ function findMostRecentPattern(
       if (!troughIsSwing) continue;
 
       const target = neckline - (resistance - neckline);
-      return {
+      candidates.push({
         confirmIdx: secondHighIdx,
         resistance,
         neckline,
         target,
-      };
+      });
     }
   }
 
-  return null;
+  return candidates;
 }
 
 export function detectDoubleTop(
@@ -93,18 +107,24 @@ export function detectDoubleTop(
   const price = resolveCurrentPrice(bars, currentPrice);
   if (price == null) return { status: "None", confirmMsAgo: null };
 
-  const pattern = findMostRecentPattern(bars, tf);
-  if (!pattern) return { status: "None", confirmMsAgo: null };
+  const evalOptions = {
+    minBarsAfterConfirm: 3,
+    maxBarsAfterConfirm: tf === "4h" ? 32 : 42,
+    requireBreakdownForActive: true,
+  };
 
-  return evaluateBearishPatternStatus(
-    bars,
-    pattern,
-    price,
-    params.maxRecencyBars,
-    {
-      minBarsAfterConfirm: 3,
-      maxBarsAfterConfirm: tf === "4h" ? 32 : 42,
-      requireBreakdownForActive: tf === "4h",
-    },
-  );
+  for (const pattern of findPatternCandidates(bars, tf)) {
+    const result = evaluateBearishPatternStatus(
+      bars,
+      pattern,
+      price,
+      params.maxRecencyBars,
+      evalOptions,
+    );
+    if (result.status === "Active") {
+      return result;
+    }
+  }
+
+  return { status: "None", confirmMsAgo: null };
 }

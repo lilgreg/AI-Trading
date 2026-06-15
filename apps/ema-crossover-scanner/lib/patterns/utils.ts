@@ -38,34 +38,61 @@ export interface BearishPatternParams {
   minNecklineDrop: number;
 }
 
+export interface HeadShouldersParams extends BearishPatternParams {
+  shoulderTolerance: number;
+  minHeadDepth: number;
+  maxPatternSpan: number;
+}
+
 export function getBullishParams(tf: BarTimeframe): BullishPatternParams {
   if (tf === "4h") {
     return {
       swingWindow: 3,
-      minBarsBetween: 10,
-      maxBarsBetween: 45,
-      maxRecencyBars: 55,
-      lowTolerance: 0.008,
-      minNecklineLift: 0.05,
+      minBarsBetween: 12,
+      maxBarsBetween: 42,
+      maxRecencyBars: 45,
+      lowTolerance: 0.01,
+      minNecklineLift: 0.06,
       shoulderTolerance: 0.01,
-      minHeadDepth: 0.045,
-      maxPatternSpan: 55,
+      minHeadDepth: 0.05,
+      maxPatternSpan: 50,
     };
   }
   return {
     swingWindow: 3,
-    minBarsBetween: 14,
-    maxBarsBetween: 110,
-    maxRecencyBars: 220,
-    lowTolerance: 0.008,
-    minNecklineLift: 0.045,
+    minBarsBetween: 10,
+    maxBarsBetween: 90,
+    maxRecencyBars: 180,
+    lowTolerance: 0.01,
+    minNecklineLift: 0.05,
     shoulderTolerance: 0.01,
-    minHeadDepth: 0.055,
-    maxPatternSpan: 140,
+    minHeadDepth: 0.06,
+    maxPatternSpan: 120,
   };
 }
 
 export function getBearishParams(tf: BarTimeframe): BearishPatternParams {
+  if (tf === "4h") {
+    return {
+      swingWindow: 3,
+      minBarsBetween: 12,
+      maxBarsBetween: 42,
+      maxRecencyBars: 45,
+      highTolerance: 0.01,
+      minNecklineDrop: 0.055,
+    };
+  }
+  return {
+    swingWindow: 3,
+    minBarsBetween: 12,
+    maxBarsBetween: 90,
+    maxRecencyBars: 180,
+    highTolerance: 0.01,
+    minNecklineDrop: 0.05,
+  };
+}
+
+export function getHeadShouldersParams(tf: BarTimeframe): HeadShouldersParams {
   if (tf === "4h") {
     return {
       swingWindow: 3,
@@ -74,6 +101,9 @@ export function getBearishParams(tf: BarTimeframe): BearishPatternParams {
       maxRecencyBars: 55,
       highTolerance: 0.007,
       minNecklineDrop: 0.045,
+      shoulderTolerance: 0.012,
+      minHeadDepth: 0.04,
+      maxPatternSpan: 55,
     };
   }
   return {
@@ -82,7 +112,10 @@ export function getBearishParams(tf: BarTimeframe): BearishPatternParams {
     maxBarsBetween: 130,
     maxRecencyBars: 220,
     highTolerance: 0.01,
-    minNecklineDrop: 0.03,
+    minNecklineDrop: 0.035,
+    shoulderTolerance: 0.012,
+    minHeadDepth: 0.045,
+    maxPatternSpan: 140,
   };
 }
 
@@ -220,6 +253,7 @@ export function evaluateBullishPatternStatus(
     showTarget?: boolean;
     minBarsAfterConfirm?: number;
     maxBarsAfterConfirm?: number;
+    requireNecklineBreakout?: boolean;
   } = {},
 ): PatternEvalResult {
   const {
@@ -227,6 +261,7 @@ export function evaluateBullishPatternStatus(
     showTarget = true,
     minBarsAfterConfirm = 3,
     maxBarsAfterConfirm = 50,
+    requireNecklineBreakout = true,
   } = options;
   const { confirmIdx, support, neckline, target } = pattern;
 
@@ -254,17 +289,21 @@ export function evaluateBullishPatternStatus(
       failedIdx = i;
       break;
     }
-    if (barHigh(bars[i]) >= target) {
+    if (showTarget && barClose(bars[i]) >= target) {
       targetHitIdx = i;
       break;
     }
   }
 
-  if (targetHitIdx == null && currentPrice >= target) targetHitIdx = bars.length - 1;
+  if (targetHitIdx == null && showTarget && currentPrice >= target) {
+    targetHitIdx = bars.length - 1;
+  }
   if (failedIdx == null && currentPrice < support * 0.995) failedIdx = bars.length - 1;
 
   if (targetHitIdx != null && isWithinRecency(bars, targetHitIdx) && showTarget) {
-    return { status: "Target", confirmMsAgo, levels: pattern };
+    if (currentPrice >= target * 0.98) {
+      return { status: "Target", confirmMsAgo, levels: pattern };
+    }
   }
 
   if (failedIdx != null && isWithinRecency(bars, failedIdx)) {
@@ -276,9 +315,11 @@ export function evaluateBullishPatternStatus(
     targetHitIdx == null &&
     failedIdx == null &&
     currentPrice > support * 1.01 &&
-    currentPrice > neckline * minAboveNeckline &&
     currentPrice < target &&
-    hasNecklineBreakout(bars, confirmIdx, neckline);
+    (requireNecklineBreakout
+      ? currentPrice > neckline * minAboveNeckline &&
+        hasNecklineBreakout(bars, confirmIdx, neckline)
+      : currentPrice > support * 1.03);
 
   if (confirmedActive) {
     return { status: "Active", confirmMsAgo, levels: pattern };
@@ -345,7 +386,7 @@ export function evaluateBearishPatternStatus(
   }
 
   if (reclaimedIdx != null && isWithinRecency(bars, reclaimedIdx)) {
-    return { status: "Failed", confirmMsAgo, levels: pattern };
+    return NONE_RESULT;
   }
 
   if (targetHitIdx != null && isWithinRecency(bars, targetHitIdx)) {
@@ -365,16 +406,86 @@ export function evaluateBearishPatternStatus(
     return { status: "Active", confirmMsAgo, levels: pattern };
   }
 
-  // Pre-breakdown: valid M-top with price retesting neckline/resistance zone.
+  return NONE_RESULT;
+}
+
+/**
+ * Head & shoulders lifecycle — right shoulder confirmed; Active when formed
+ * and price has not reclaimed the head or completed the measured move.
+ */
+export function evaluateHeadShouldersStatus(
+  bars: OhlcBar[],
+  pattern: BearishPatternLevels,
+  currentPrice: number,
+  maxRecencyBars: number,
+  options: {
+    minBarsAfterConfirm?: number;
+    maxBarsAfterConfirm?: number;
+  } = {},
+): PatternEvalResult {
+  const {
+    minBarsAfterConfirm = 3,
+    maxBarsAfterConfirm = 50,
+  } = options;
+  const { confirmIdx, resistance, neckline, target } = pattern;
+
   if (
-    !requireBreakdownForActive &&
-    !hasBreakdown &&
+    !isWithinRecency(bars, confirmIdx) ||
+    !isConfirmRecent(bars, confirmIdx, maxRecencyBars)
+  ) {
+    return NONE_RESULT;
+  }
+
+  const barsAfterConfirm = bars.length - 1 - confirmIdx;
+  if (
+    barsAfterConfirm < minBarsAfterConfirm ||
+    barsAfterConfirm > maxBarsAfterConfirm
+  ) {
+    return NONE_RESULT;
+  }
+
+  const confirmMsAgo = msAgoFromBar(bars, confirmIdx);
+  let targetHitIdx: number | null = null;
+  let reclaimedIdx: number | null = null;
+
+  for (let i = confirmIdx + 1; i < bars.length; i++) {
+    if (barClose(bars[i]) > resistance * 1.003) {
+      reclaimedIdx = i;
+      break;
+    }
+    if (barLow(bars[i]) <= target) {
+      targetHitIdx = i;
+      break;
+    }
+  }
+
+  if (targetHitIdx == null && currentPrice <= target) targetHitIdx = bars.length - 1;
+  if (reclaimedIdx == null && currentPrice > resistance * 1.003) {
+    reclaimedIdx = bars.length - 1;
+  }
+
+  if (reclaimedIdx != null && isWithinRecency(bars, reclaimedIdx)) {
+    return NONE_RESULT;
+  }
+
+  if (targetHitIdx != null && isWithinRecency(bars, targetHitIdx)) {
+    return NONE_RESULT;
+  }
+
+  const hasBreakdown = hasNecklineBreakdown(bars, confirmIdx, neckline);
+  const rightShoulderHigh = barHigh(bars[confirmIdx]);
+
+  const confirmedActive =
     targetHitIdx == null &&
     reclaimedIdx == null &&
-    currentPrice >= neckline * 1.002 &&
-    currentPrice <= resistance * 0.998 &&
-    barHigh(bars[confirmIdx]) >= resistance * 0.995
-  ) {
+    rightShoulderHigh < resistance * 0.998 &&
+    currentPrice <= resistance * 1.002 &&
+    currentPrice > target &&
+    (hasBreakdown
+      ? currentPrice <= neckline * 1.008
+      : currentPrice >= neckline * 0.97 && currentPrice <= resistance * 0.999);
+
+  if (confirmedActive) {
     return { status: "Active", confirmMsAgo, levels: pattern };
   }
 
@@ -390,7 +501,7 @@ const STATUS_PRIORITY: Record<PatternStatus, number> = {
 
 /**
  * Merge 1h / 4h results.
- * "1h+4h" ONLY when both timeframes detect the same non-None status independently.
+ * "1h+4h" ONLY when both timeframes independently qualify as Active.
  */
 export function mergeMultiTimeframe(
   oneHour: PatternEvalResult,
@@ -407,18 +518,6 @@ export function mergeMultiTimeframe(
 
   if (oneHour.status === "Active" && fourHour.status === "Active") {
     status = "Active";
-    timeframes = "1h+4h";
-    confirmMsAgo = Math.min(
-      oneHour.confirmMsAgo ?? Number.MAX_SAFE_INTEGER,
-      fourHour.confirmMsAgo ?? Number.MAX_SAFE_INTEGER,
-    );
-    if (!Number.isFinite(confirmMsAgo)) confirmMsAgo = null;
-  } else if (
-    oneHour.status !== "None" &&
-    fourHour.status !== "None" &&
-    oneHour.status === fourHour.status
-  ) {
-    status = oneHour.status;
     timeframes = "1h+4h";
     confirmMsAgo = Math.min(
       oneHour.confirmMsAgo ?? Number.MAX_SAFE_INTEGER,

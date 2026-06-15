@@ -1,12 +1,26 @@
 import { scanSymbol } from "../lib/scanner";
 import { parseSymbol } from "../lib/stocks";
-import type { PatternDetection } from "../lib/types";
+import type { PatternDetection, SymbolPatterns } from "../lib/types";
 
-const TICKERS = ["TSM", "HUT", "NBIS", "SNX"];
+const TICKERS = ["ARTY", "TSM", "SNX", "WARP", "HUT", "NBIS"];
 
 function fmtPattern(name: string, p: PatternDetection): string {
   if (p.status === "None") return `${name}: None`;
   return `${name}: ${p.status} (${p.timeframes})`;
+}
+
+function printPatterns(ticker: string, p: SymbolPatterns) {
+  console.log(`\n${ticker}:`);
+  for (const [name, key] of [
+    ["DB", "doubleBottom"],
+    ["DT", "doubleTop"],
+    ["HS", "headShoulders"],
+    ["IHS", "inverseHeadShoulders"],
+  ] as const) {
+    const det = p[key];
+    console.log(`  ${fmtPattern(name, det)}`);
+    if (det.debug) console.log(`    debug ${name}:`, det.debug);
+  }
 }
 
 async function main() {
@@ -17,15 +31,9 @@ async function main() {
       continue;
     }
     const result = await scanSymbol(parsed, 120, true);
-    const p = result.patterns;
-    console.log(`\n${ticker}:`);
-    console.log(`  ${fmtPattern("DB", p.doubleBottom)}`);
-    if (p.doubleBottom.debug) console.log("    debug DB:", p.doubleBottom.debug);
-    console.log(`  ${fmtPattern("DT", p.doubleTop)}`);
-    if (p.doubleTop.debug) console.log("    debug DT:", p.doubleTop.debug);
-    console.log(`  ${fmtPattern("IH&S", p.inverseHeadShoulders)}`);
+    printPatterns(ticker, result.patterns);
     console.log(
-      `  Cross 1h: ${result.cross1h.crossoverDate ?? "none"} | Cross 4h: ${result.cross4h.crossoverDate ?? "none"}`,
+      `  Cross 4h: ${result.cross4h.crossoverAt ?? "none"} | Cross 1h: ${result.cross1h.crossoverAt ?? "none"}`,
     );
   }
 }
