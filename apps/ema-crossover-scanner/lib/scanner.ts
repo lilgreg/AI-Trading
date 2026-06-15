@@ -20,9 +20,13 @@ export async function scanSymbol(
   interval: ScanInterval,
 ): Promise<StockScanResult> {
   const tvSymbol = resolveTradingViewSymbol(parsed);
+  const displayTicker = tvSymbol.includes(":")
+    ? tvSymbol.split(":", 2)[1]
+    : tvSymbol;
 
   const base: StockScanResult = {
     symbol: parsed.yahoo,
+    displayTicker,
     displaySymbol: tvSymbol,
     tradingViewSymbol: tvSymbol,
     name: null,
@@ -45,6 +49,9 @@ export async function scanSymbol(
     ]);
 
     const resolvedTv = resolveTradingViewSymbol(parsed, meta.quoteExchange);
+    base.displayTicker = resolvedTv.includes(":")
+      ? resolvedTv.split(":", 2)[1]
+      : resolvedTv;
     base.displaySymbol = resolvedTv;
     base.tradingViewSymbol = resolvedTv;
     base.tradingViewUrl = tradingViewChartUrl(resolvedTv, interval);
@@ -129,6 +136,6 @@ export function sortByRecentCrossover(results: StockScanResult[]): StockScanResu
       return a.ema20Above50 ? -1 : 1;
     }
 
-    return a.displaySymbol.localeCompare(b.displaySymbol);
+    return a.displayTicker.localeCompare(b.displayTicker);
   });
 }

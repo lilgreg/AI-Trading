@@ -268,7 +268,7 @@ export default function HomePage() {
                         rel="noopener noreferrer"
                         className="text-[var(--accent)] hover:underline"
                       >
-                        {row.displaySymbol}
+                        {row.displayTicker}
                       </a>
                     </td>
                     <td className="max-w-[220px] truncate text-[var(--muted)]">

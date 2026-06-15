@@ -1,5 +1,8 @@
 export interface StockScanResult {
   symbol: string;
+  /** Ticker only for UI (e.g. JNJ) */
+  displayTicker: string;
+  /** Full TradingView symbol (e.g. NYSE:JNJ) */
   displaySymbol: string;
   tradingViewSymbol: string;
   name: string | null;
