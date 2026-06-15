@@ -5,6 +5,7 @@ import {
   type CrossoverInfo,
 } from "./ema";
 import { evaluateAllPatterns, NONE_PATTERNS } from "./patterns";
+import { pickPrimaryLogoUrl } from "./symbol-logo";
 import {
   resolveTradingViewSymbol,
   tradingViewChartUrl,
@@ -68,6 +69,7 @@ export async function scanSymbol(
     cross1h: { ...EMPTY_CROSSOVER },
     cross4h: { ...EMPTY_CROSSOVER },
     tradingViewUrl: tradingViewChartUrl(tvSymbol, "4h"),
+    logoUrl: pickPrimaryLogoUrl(displayTicker, tvSymbol, parsed.yahoo),
   };
 
   try {
@@ -84,6 +86,11 @@ export async function scanSymbol(
     base.displaySymbol = resolvedTv;
     base.tradingViewSymbol = resolvedTv;
     base.tradingViewUrl = tradingViewChartUrl(resolvedTv, "4h");
+    base.logoUrl = pickPrimaryLogoUrl(
+      base.displayTicker,
+      resolvedTv,
+      parsed.yahoo,
+    );
 
     if (bars4h.length < SLOW_EMA + 5 || hourly.length < SLOW_EMA + 5) {
       return {

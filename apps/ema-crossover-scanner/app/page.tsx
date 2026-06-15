@@ -225,8 +225,13 @@ function sortIndicator(active: boolean, dir: SortDir): string {
 
 const STATUS_POLL_MS = 60_000;
 const QUOTES_POLL_MS = 45_000;
-const NEWS_POLL_MS = 75_000;
+const NEWS_POLL_MS = Number(process.env.NEXT_PUBLIC_NEWS_POLL_MS ?? 20_000);
 const SCAN_POLL_MS = 30_000;
+const NEWS_POLL_LABEL_SEC = Math.round(NEWS_POLL_MS / 1000);
+
+function newsHeadlineId(item: NewsHeadline): string {
+  return item.url || `${item.symbol}-${item.headline}`;
+}
 
 interface NewsHeadline {
   symbol: string;
@@ -251,10 +256,13 @@ export default function HomePage() {
   const [newsHeadlines, setNewsHeadlines] = useState<NewsHeadline[]>([]);
   const [newsSymbolCount, setNewsSymbolCount] = useState(0);
   const [newsLoading, setNewsLoading] = useState(false);
+  const [glowingNewsIds, setGlowingNewsIds] = useState<Set<string>>(() => new Set());
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const statusPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const quotesPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const newsPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const seenNewsIdsRef = useRef<Set<string>>(new Set());
+  const newsBarRef = useRef<HTMLElement | null>(null);
 
   const fetchCache = useCallback(async (options?: { quiet?: boolean }) => {
     if (!options?.quiet) setLoading(true);
@@ -340,7 +348,21 @@ export default function HomePage() {
         symbolCount?: number;
       };
 
-      setNewsHeadlines(body.headlines ?? []);
+      const incoming = body.headlines ?? [];
+      const freshIds = incoming
+        .map(newsHeadlineId)
+        .filter((id) => !seenNewsIdsRef.current.has(id));
+
+      if (seenNewsIdsRef.current.size > 0 && freshIds.length > 0) {
+        setGlowingNewsIds(new Set(freshIds));
+        setTimeout(() => setGlowingNewsIds(new Set()), 1800);
+      }
+
+      for (const id of incoming.map(newsHeadlineId)) {
+        seenNewsIdsRef.current.add(id);
+      }
+
+      setNewsHeadlines(incoming);
       setNewsSymbolCount(body.symbolCount ?? 0);
     } catch {
       // ignore background news poll errors
@@ -437,6 +459,29 @@ export default function HomePage() {
       if (pollRef.current) clearInterval(pollRef.current);
     };
   }, [data?.scanInProgress, fetchCache]);
+
+  useEffect(() => {
+    const el = newsBarRef.current;
+    if (!el) return;
+
+    const setNewsHeight = () => {
+      const height = Math.ceil(el.getBoundingClientRect().height);
+      document.documentElement.style.setProperty(
+        "--news-bar-height",
+        `${height}px`,
+      );
+    };
+
+    setNewsHeight();
+    const observer = new ResizeObserver(setNewsHeight);
+    observer.observe(el);
+    window.addEventListener("resize", setNewsHeight);
+
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", setNewsHeight);
+    };
+  }, [newsHeadlines.length, newsLoading]);
 
   const handleSort = (key: SortKey) => {
     if (sortKey === key) {
@@ -604,7 +649,7 @@ export default function HomePage() {
         </div>
       </section>
 
-      <section className="card mb-4 p-4">
+      <section ref={newsBarRef} className="sticky-news-bar card mb-4 p-4">
         <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
           <h2 className="text-sm font-medium text-[var(--text)]">
             News · Recent EMA crosses (1h/4h)
@@ -613,27 +658,32 @@ export default function HomePage() {
             {newsLoading && newsHeadlines.length === 0
               ? "Loading headlines…"
               : newsSymbolCount > 0
-                ? `${newsSymbolCount} crossed symbols · ${newsHeadlines.length} headlines · refreshes every ~75s`
+                ? `${newsSymbolCount} crossed symbols · ${newsHeadlines.length} headlines · refreshes every ~${NEWS_POLL_LABEL_SEC}s`
                 : "No qualifying crosses yet"}
           </span>
         </div>
         {newsHeadlines.length > 0 ? (
           <div className="news-row">
-            {newsHeadlines.map((item) => (
-              <a
-                key={`${item.symbol}-${item.url}`}
-                href={item.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="news-chip"
-              >
-                <div className="news-chip-ticker">{item.displayTicker}</div>
-                <div className="news-chip-headline">{item.headline}</div>
-                <div className="news-chip-meta">
-                  {item.timeAgo} · {item.publisher}
-                </div>
-              </a>
-            ))}
+            {newsHeadlines.map((item) => {
+              const headlineId = newsHeadlineId(item);
+              const isNew = glowingNewsIds.has(headlineId);
+
+              return (
+                <a
+                  key={headlineId}
+                  href={item.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className={`news-chip${isNew ? " news-chip-new" : ""}`}
+                >
+                  <div className="news-chip-ticker">{item.displayTicker}</div>
+                  <div className="news-chip-headline">{item.headline}</div>
+                  <div className="news-chip-meta">
+                    {item.timeAgo} · {item.publisher}
+                  </div>
+                </a>
+              );
+            })}
           </div>
         ) : (
           <p className="text-sm text-[var(--muted)]">
@@ -643,10 +693,10 @@ export default function HomePage() {
         )}
       </section>
 
-      <section className="card overflow-hidden">
+      <section className="card">
         <div className="overflow-x-auto">
           <table className="scan-table">
-            <thead>
+            <thead className="scan-table-head">
               <tr>
                 <th>#</th>
                 <th colSpan={2}>Symbol</th>
@@ -725,6 +775,8 @@ export default function HomePage() {
                           <StockLogo
                             displayTicker={ticker}
                             tradingViewSymbol={row.tradingViewSymbol}
+                            yahooSymbol={row.symbol}
+                            logoUrl={row.logoUrl}
                           />
                           <span>{ticker}</span>
                         </a>

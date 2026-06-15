@@ -1,26 +1,57 @@
 "use client";
 
-import { useState } from "react";
-import { logoInitials, tradingViewLogoUrl } from "@/lib/symbol-logo";
+import { useEffect, useMemo, useState } from "react";
+import {
+  buildLogoUrlChain,
+  logoBadgeColor,
+  logoInitials,
+  shouldUseInitialsOnly,
+} from "@/lib/symbol-logo";
 
 interface StockLogoProps {
   displayTicker: string;
   tradingViewSymbol?: string | null;
+  yahooSymbol?: string | null;
+  logoUrl?: string | null;
   className?: string;
 }
 
 export function StockLogo({
   displayTicker,
   tradingViewSymbol,
+  yahooSymbol,
+  logoUrl,
   className = "",
 }: StockLogoProps) {
-  const [failed, setFailed] = useState(false);
-  const initials = logoInitials(displayTicker);
+  const urls = useMemo(
+    () =>
+      buildLogoUrlChain(
+        displayTicker,
+        tradingViewSymbol,
+        yahooSymbol ?? displayTicker,
+        logoUrl,
+      ),
+    [displayTicker, tradingViewSymbol, yahooSymbol, logoUrl],
+  );
 
-  if (failed) {
+  const initials = logoInitials(displayTicker);
+  const badgeColor = logoBadgeColor(displayTicker);
+  const skipImages =
+    urls.length === 0 || (shouldUseInitialsOnly(yahooSymbol ?? displayTicker) && !logoUrl);
+
+  const [urlIndex, setUrlIndex] = useState(0);
+
+  useEffect(() => {
+    setUrlIndex(0);
+  }, [urls]);
+
+  const showPlaceholder = skipImages || urlIndex >= urls.length;
+
+  if (showPlaceholder) {
     return (
       <span
-        className={`stock-logo-placeholder inline-flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-md border border-[var(--border)] bg-[var(--surface-2)] text-[10px] font-semibold leading-none text-[var(--muted)] ${className}`}
+        className={`stock-logo-placeholder inline-flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-full text-[10px] font-semibold leading-none text-white ${className}`}
+        style={{ backgroundColor: badgeColor }}
         aria-hidden
       >
         {initials}
@@ -30,14 +61,14 @@ export function StockLogo({
 
   return (
     <img
-      src={tradingViewLogoUrl(displayTicker, tradingViewSymbol)}
+      src={urls[urlIndex]}
       alt=""
       width={26}
       height={26}
       loading="lazy"
       decoding="async"
-      className={`stock-logo h-[26px] w-[26px] shrink-0 rounded-md object-contain ${className}`}
-      onError={() => setFailed(true)}
+      className={`stock-logo h-[26px] w-[26px] shrink-0 rounded-md object-contain bg-[var(--surface-2)] ${className}`}
+      onError={() => setUrlIndex((i) => i + 1)}
     />
   );
 }

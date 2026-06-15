@@ -81,6 +81,8 @@ export interface StockScanResult {
   /** Most recent bullish 20/50 cross on 4h bars */
   cross4h: CrossoverDisplay;
   tradingViewUrl: string;
+  /** Resolved logo CDN URL from scan (client may still fall back on error). */
+  logoUrl?: string | null;
   error?: string;
 }
 

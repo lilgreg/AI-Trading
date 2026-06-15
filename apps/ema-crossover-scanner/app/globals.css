@@ -11,6 +11,7 @@
   --green: #089981;
   --red: #f23645;
   --amber: #ff9800;
+  --news-bar-height: 0px;
 }
 
 body {
@@ -117,6 +118,14 @@ table.scan-table th {
   white-space: nowrap;
 }
 
+table.scan-table thead.scan-table-head th {
+  position: sticky;
+  top: var(--news-bar-height, 0px);
+  z-index: 20;
+  background: var(--surface);
+  box-shadow: 0 1px 0 var(--border);
+}
+
 table.scan-table th.sortable {
   cursor: pointer;
   user-select: none;
@@ -164,6 +173,14 @@ table.scan-table tbody tr:hover {
   text-decoration: underline;
 }
 
+.sticky-news-bar {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  background: var(--surface);
+  box-shadow: 0 1px 0 var(--border);
+}
+
 .news-row {
   display: flex;
   gap: 0.625rem;
@@ -199,6 +216,25 @@ table.scan-table tbody tr:hover {
 .news-chip:hover {
   border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
   background: color-mix(in srgb, var(--accent) 6%, var(--surface-2));
+}
+
+.news-chip-new {
+  animation: news-chip-glow 1.8s ease-out forwards;
+}
+
+@keyframes news-chip-glow {
+  0% {
+    border-color: color-mix(in srgb, var(--accent) 70%, var(--border));
+    box-shadow:
+      0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent),
+      0 0 14px color-mix(in srgb, var(--accent) 30%, transparent);
+    background: color-mix(in srgb, var(--accent) 10%, var(--surface-2));
+  }
+  100% {
+    border-color: var(--border);
+    box-shadow: none;
+    background: var(--surface-2);
+  }
 }
 
 .news-chip-ticker {
