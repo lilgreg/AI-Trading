@@ -44,9 +44,10 @@ function hasBlobToken(): boolean {
 async function readBlobJson<T>(pathname: string): Promise<T | null> {
   if (!hasBlobToken()) return null;
   try {
-    const { head } = await import("@vercel/blob");
-    const meta = await head(pathname);
-    const res = await fetch(meta.url, { cache: "no-store" });
+    const { get } = await import("@vercel/blob");
+    const blob = await get(pathname, { access: "private" });
+    if (!blob) return null;
+    const res = await fetch(blob.url, { cache: "no-store" });
     if (!res.ok) return null;
     return (await res.json()) as T;
   } catch {
@@ -58,7 +59,7 @@ async function writeBlobJson(pathname: string, data: unknown): Promise<void> {
   if (!hasBlobToken()) return;
   const { put } = await import("@vercel/blob");
   await put(pathname, JSON.stringify(data), {
-    access: "public",
+    access: "private",
     addRandomSuffix: false,
     contentType: "application/json",
   });
