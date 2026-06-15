@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { runBackgroundScan } from "@/lib/scan-job";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 300;
+export const maxDuration = 800;
 
 function authorizeCron(request: NextRequest): boolean {
   const secret = process.env.CRON_SECRET;

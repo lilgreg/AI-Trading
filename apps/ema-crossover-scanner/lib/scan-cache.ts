@@ -8,6 +8,10 @@ export interface ScanSnapshot extends ScanResponse {
   completedAt: string;
   /** Hash of scan config — invalidates cache when env changes */
   configKey: string;
+  /** False while a multi-invocation scan is still in progress */
+  scanComplete?: boolean;
+  /** ISO timestamp of the most recent partial or final write */
+  lastSavedAt?: string;
 }
 
 export type { ScanCacheStatus, CachedScanResponse } from "./types";
@@ -112,7 +116,7 @@ interface ScanLock {
   expiresAt: string;
 }
 
-const LOCK_TTL_MS = 10 * 60 * 1000;
+const LOCK_TTL_MS = 15 * 60 * 1000;
 
 export async function tryAcquireScanLock(): Promise<boolean> {
   const now = Date.now();

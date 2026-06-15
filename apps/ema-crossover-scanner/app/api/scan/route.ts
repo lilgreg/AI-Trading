@@ -7,10 +7,14 @@ import {
   toCachedResponse,
   type ScanSnapshot,
 } from "@/lib/scan-cache";
-import { ensureFreshScan, runBackgroundScan } from "@/lib/scan-job";
+import {
+  ensureFreshScan,
+  retryFailedSymbolsInBackground,
+  runBackgroundScan,
+} from "@/lib/scan-job";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 300;
+export const maxDuration = 800;
 
 function parseForce(searchParams: URLSearchParams): boolean {
   return searchParams.get("force") === "true";
@@ -59,6 +63,11 @@ export async function GET(request: NextRequest) {
     void ensureFreshScan({}, { force: true });
   } else if (status.cacheEmpty || status.stale) {
     void ensureFreshScan({});
+  } else if (
+    !status.scanInProgress &&
+    snapshot?.results?.some((row) => row.error)
+  ) {
+    void retryFailedSymbolsInBackground({});
   }
 
   snapshot = await ensureLogoBackfill(snapshot);
@@ -81,7 +90,7 @@ export async function POST(_request: NextRequest) {
   }
 
   try {
-    const updated = await runBackgroundScan();
+    const updated = await runBackgroundScan({}, { force: true });
     const freshStatus = await buildCacheStatus(updated);
     return NextResponse.json(toCachedResponse(updated, freshStatus));
   } catch (err) {

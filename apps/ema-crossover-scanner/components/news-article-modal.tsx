@@ -2,10 +2,12 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  fetchNewsPreview,
+  fetchNewsPreviewFresh,
   getCachedNewsPreview,
 } from "@/lib/news-preview-cache";
 import type { NewsHeadline } from "@/lib/news";
+
+const ADEQUATE_SUMMARY_LEN = 100;
 
 function changeColorClass(value: number | null): string {
   if (value == null) return "text-[var(--muted)]";
@@ -36,6 +38,10 @@ function growSummary(
   const best = longestSummary(current, ...candidates);
   if (!best) return current;
   return best.length > current.length ? best : current;
+}
+
+function hasAdequateSummary(text: string | null | undefined): boolean {
+  return Boolean(text?.trim() && text.trim().length >= ADEQUATE_SUMMARY_LEN);
 }
 
 interface NewsArticleModalProps {
@@ -83,20 +89,24 @@ export function NewsArticleModal({ article, onClose }: NewsArticleModalProps) {
       setDisplaySummary((prev) => growSummary(prev, ...candidates));
     };
 
-    const seed = longestSummary(article.summary, getCachedNewsPreview(article.url)) ?? "";
+    const yahooSummary = article.summary?.trim() ?? "";
+    const cachedPreview = getCachedNewsPreview(article.url);
+    const seed = longestSummary(yahooSummary, cachedPreview) ?? "";
     setDisplaySummary(seed);
-    setPreviewPending(!seed);
+    setPreviewPending(!hasAdequateSummary(seed));
 
     void (async () => {
       try {
-        const preview = await fetchNewsPreview(article.url, controller.signal);
+        const preview = await fetchNewsPreviewFresh(article.url, controller.signal);
         applyGrow(preview);
       } catch {
         // ignore preview fetch errors
       } finally {
         if (cancelled) return;
         setPreviewPending(false);
-        applyGrow(article.headline);
+        if (!hasAdequateSummary(yahooSummary)) {
+          applyGrow(article.headline);
+        }
       }
     })();
 
@@ -109,8 +119,10 @@ export function NewsArticleModal({ article, onClose }: NewsArticleModalProps) {
   if (!article) return null;
 
   const summaryText =
-    displaySummary || (!previewPending ? article.headline : "");
-  const showLoadingHint = previewPending && !displaySummary;
+    displaySummary ||
+    article.summary?.trim() ||
+    (!previewPending ? article.headline : "");
+  const showLoadingHint = previewPending && !summaryText;
 
   return (
     <div

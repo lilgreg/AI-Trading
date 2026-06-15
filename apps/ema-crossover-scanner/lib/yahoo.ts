@@ -153,11 +153,17 @@ async function fetchYahooLibraryChart(
 
 async function fetchYahooHourlyBarsOnce(symbol: string, days: number): Promise<OhlcBar[]> {
   try {
-    return await fetchYahooLibraryChart(symbol, days, YAHOO_TIMEOUT_MS);
-  } catch (libErr) {
-    if (!isRetryableYahooError(libErr)) throw libErr;
-    await sleep(400);
-    return fetchYahooChartV8Direct(symbol, days, YAHOO_RETRY_TIMEOUT_MS);
+    return await fetchYahooChartV8Direct(symbol, days, YAHOO_TIMEOUT_MS);
+  } catch (v8Err) {
+    if (!isRetryableYahooError(v8Err)) throw v8Err;
+    await sleep(300);
+    try {
+      return await fetchYahooLibraryChart(symbol, days, YAHOO_TIMEOUT_MS);
+    } catch (libErr) {
+      if (!isRetryableYahooError(libErr)) throw libErr;
+      await sleep(400);
+      return fetchYahooChartV8Direct(symbol, days, YAHOO_RETRY_TIMEOUT_MS);
+    }
   }
 }
 
