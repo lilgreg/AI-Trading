@@ -24,6 +24,9 @@ export const SCAN_BATCH_SIZE = 4;
 /** Pause between batches of this many symbols (rate-limit cooldown). */
 export const SCAN_BATCH_GROUP_SIZE = 50;
 export const SCAN_BATCH_GROUP_PAUSE_MS = 8_000;
+/** Extra cooldown after symbol index 120 — Yahoo throttles around here. */
+export const SCAN_TAIL_GROUP_PAUSE_MS = 15_000;
+export const SCAN_TAIL_SYMBOL_INDEX = 120;
 export const SCAN_BATCH_PAUSE_MS = 1_500;
 export const SCAN_RETRY_COOLDOWN_MS = 10_000;
 export const SCAN_RETRY_BATCH_SIZE = 2;
@@ -199,15 +202,24 @@ async function scanSymbolBatch(
   const results: StockScanResult[] = [];
 
   for (let i = 0; i < symbols.length; i += batchSize) {
+    const batch = symbols.slice(i, i + batchSize);
+
     if (i > 0) {
+      const tailBatch =
+        symbolIndexFor != null &&
+        batch.some((parsed) => (symbolIndexFor(parsed) ?? 0) >= SCAN_TAIL_SYMBOL_INDEX);
+
       if (i % groupSize === 0) {
-        await sleep(groupPauseMs);
+        await sleep(
+          tailBatch || i >= SCAN_TAIL_SYMBOL_INDEX
+            ? SCAN_TAIL_GROUP_PAUSE_MS
+            : groupPauseMs,
+        );
       } else {
         await sleep(batchPauseMs);
       }
     }
 
-    const batch = symbols.slice(i, i + batchSize);
     const batchResults = await Promise.all(
       batch.map((s) =>
         scanSymbol(

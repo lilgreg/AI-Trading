@@ -251,7 +251,16 @@ async function mergeScanResults(
       false,
       {
         onResult: async (result) => {
-          resultsBySymbol.set(result.symbol, result);
+          const prior =
+            resultsBySymbol.get(result.symbol) ??
+            fallbackBySymbol.get(result.symbol);
+          const keepPrior =
+            prior != null &&
+            isSuccessfulResult(prior) &&
+            Boolean(result.error) &&
+            result.ema20 == null;
+
+          resultsBySymbol.set(result.symbol, keepPrior ? prior : result);
           completedSinceSave += 1;
           if (completedSinceSave >= PARTIAL_SAVE_EVERY) {
             completedSinceSave = 0;

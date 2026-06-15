@@ -16,6 +16,54 @@ function mergeSessionChange(
   return incoming ?? existing;
 }
 
+function mergeNullableNumber(
+  incoming: number | null | undefined,
+  existing: number | null | undefined,
+): number | null {
+  return incoming ?? existing ?? null;
+}
+
+/** Keep live quote/session fields when a scan refresh returns nulls (throttle/partial). */
+export function mergeScanResultsPreservingQuotes(
+  previous: StockScanResult[],
+  incoming: StockScanResult[],
+): StockScanResult[] {
+  const prevBySymbol = new Map(previous.map((row) => [row.symbol, row]));
+
+  return incoming.map((row) => {
+    const prev = prevBySymbol.get(row.symbol);
+    if (!prev) return row;
+
+    const merged: StockScanResult = {
+      ...row,
+      price: mergeNullableNumber(row.price, prev.price),
+      preMarketChange: mergeSessionChange(row.preMarketChange, prev.preMarketChange),
+      regularMarketChange: mergeSessionChange(
+        row.regularMarketChange,
+        prev.regularMarketChange,
+      ),
+      postMarketChange: mergeSessionChange(
+        row.postMarketChange,
+        prev.postMarketChange,
+      ),
+    };
+
+    // Keep computed crosses/EMAs when a rescan fails but prior row was good.
+    if (row.error && !row.ema20 && prev.ema20 != null) {
+      merged.ema20 = prev.ema20;
+      merged.ema50 = prev.ema50;
+      merged.ema20Above50 = prev.ema20Above50;
+      merged.cross1h = prev.cross1h;
+      merged.cross4h = prev.cross4h;
+      merged.patterns = prev.patterns;
+      merged.dataSource = prev.dataSource ?? row.dataSource;
+      merged.error = undefined;
+    }
+
+    return merged;
+  });
+}
+
 export function applyQuoteUpdates(
   results: StockScanResult[],
   updates: QuoteUpdate[],

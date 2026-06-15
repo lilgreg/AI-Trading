@@ -12,7 +12,7 @@ import {
   normalizePatterns,
 } from "@/lib/normalize-scan-result";
 import { patternSortKey } from "@/lib/pattern-sort";
-import { applyQuoteUpdates, dailyChangeByQuoteUpdates } from "@/lib/quote-updates";
+import { applyQuoteUpdates, mergeScanResultsPreservingQuotes } from "@/lib/quote-updates";
 import { StockLogo } from "@/components/stock-logo";
 import { NewsArticleModal } from "@/components/news-article-modal";
 import type { NewsHeadline } from "@/lib/news";
@@ -212,6 +212,14 @@ function rowPatternSortKey(patterns: StockScanResult["patterns"]): number {
   );
 }
 
+function crossoverCellError(
+  cross: CrossoverDisplay | undefined,
+  rowError?: string,
+): string | undefined {
+  if (hasCrossover(cross)) return undefined;
+  return rowError;
+}
+
 function hasCrossover(cross: CrossoverDisplay | undefined): boolean {
   const safe = normalizeCrossover(cross);
   return Boolean(safe.crossoverAt ?? safe.crossoverDate);
@@ -233,6 +241,7 @@ function sortIndicator(active: boolean, dir: SortDir): string {
 
 const STATUS_POLL_MS = 60_000;
 const QUOTES_POLL_MS = 45_000;
+const QUOTES_CHUNK_SIZE = 80;
 const RETRY_FAILED_THRESHOLD = 10;
 const RETRY_POLL_MS = 45_000;
 const TAIL_SYMBOL_START = 120;
@@ -343,9 +352,24 @@ export default function HomePage() {
   const retryPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const statusPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const quotesPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const quoteChunkOffsetRef = useRef(0);
   const newsPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const seenNewsIdsRef = useRef<Set<string>>(new Set());
   const newsBarRef = useRef<HTMLElement | null>(null);
+
+  const applyScanPayload = useCallback(
+    (
+      json: CachedScanResponse,
+      previous: CachedScanResponse | null,
+    ): CachedScanResponse => {
+      if (!previous?.results?.length) return json;
+      return {
+        ...json,
+        results: mergeScanResultsPreservingQuotes(previous.results, json.results),
+      };
+    },
+    [],
+  );
 
   const fetchCache = useCallback(async (options?: { quiet?: boolean }) => {
     if (!options?.quiet) setLoading(true);
@@ -360,13 +384,13 @@ export default function HomePage() {
       const json = normalizeCachedResponse(
         (await res.json()) as Partial<CachedScanResponse>,
       );
-      setData(json);
+      setData((prev) => applyScanPayload(json, prev));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load scan");
     } finally {
       if (!options?.quiet) setLoading(false);
     }
-  }, []);
+  }, [applyScanPayload]);
 
   const triggerRescan = useCallback(async () => {
     setRescanning(true);
@@ -380,13 +404,13 @@ export default function HomePage() {
       const json = normalizeCachedResponse(
         (await res.json()) as Partial<CachedScanResponse>,
       );
-      setData(json);
+      setData((prev) => applyScanPayload(json, prev));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Rescan failed");
     } finally {
       setRescanning(false);
     }
-  }, []);
+  }, [applyScanPayload]);
 
   const retryFailedScan = useCallback(async (options?: { quiet?: boolean }) => {
     if (!options?.quiet) setRetryingFailed(true);
@@ -402,7 +426,7 @@ export default function HomePage() {
           retryableRemaining?: number;
         },
       );
-      setData(json);
+      setData((prev) => applyScanPayload(json, prev));
 
       const errors = json.results?.filter((r) => r.error).length ?? 0;
       const tailErrors =
@@ -415,7 +439,7 @@ export default function HomePage() {
     } finally {
       if (!options?.quiet) setRetryingFailed(false);
     }
-  }, []);
+  }, [applyScanPayload]);
 
   const pollScanStatus = useCallback(async () => {
     try {
@@ -485,7 +509,14 @@ export default function HomePage() {
 
   const pollQuotes = useCallback(async () => {
     try {
-      const res = await fetch("/api/quotes", { cache: "no-store" });
+      const totalSymbols = data?.results?.length ?? 0;
+      if (totalSymbols === 0) return;
+
+      const offset = quoteChunkOffsetRef.current % totalSymbols;
+      const res = await fetch(
+        `/api/quotes?offset=${offset}&limit=${QUOTES_CHUNK_SIZE}`,
+        { cache: "no-store" },
+      );
       if (!res.ok) return;
 
       const body = (await res.json()) as {
@@ -497,12 +528,22 @@ export default function HomePage() {
           regularMarketChange: number | null;
           postMarketChange: number | null;
         }>;
+        totalSymbols?: number;
       };
 
       if (!body.quotes?.length) return;
 
+      quoteChunkOffsetRef.current =
+        (offset + body.quotes.length) % (body.totalSymbols ?? totalSymbols);
+
       setQuotesLive(true);
-      setQuoteDailyBySymbol(dailyChangeByQuoteUpdates(body.quotes));
+      setQuoteDailyBySymbol((prev) => {
+        const next = new Map(prev);
+        for (const quote of body.quotes!) {
+          next.set(quote.symbol, quote.dailyChange);
+        }
+        return next;
+      });
       setData((prev) => {
         if (!prev?.results?.length) return prev;
         return {
@@ -513,7 +554,7 @@ export default function HomePage() {
     } catch {
       // ignore background quote poll errors
     }
-  }, []);
+  }, [data?.results?.length]);
 
   useEffect(() => {
     void fetchCache();
@@ -709,8 +750,8 @@ export default function HomePage() {
     const rows = filteredResults;
     return {
       above: rows.filter((r) => r.ema20Above50 && !r.error).length,
-      withCross1h: rows.filter((r) => hasCrossover(r.cross1h) && !r.error).length,
-      withCross4h: rows.filter((r) => hasCrossover(r.cross4h) && !r.error).length,
+      withCross1h: rows.filter((r) => hasCrossover(r.cross1h)).length,
+      withCross4h: rows.filter((r) => hasCrossover(r.cross4h)).length,
       errors: rows.filter((r) => r.error).length,
       total: data?.symbolCount ?? rows.length,
     };
@@ -979,10 +1020,16 @@ export default function HomePage() {
                         )}
                       </td>
                       <td>
-                        <CrossoverCell cross={cross4h} error={row.error} />
+                        <CrossoverCell
+                          cross={cross4h}
+                          error={crossoverCellError(cross4h, row.error)}
+                        />
                       </td>
                       <td>
-                        <CrossoverCell cross={cross1h} error={row.error} />
+                        <CrossoverCell
+                          cross={cross1h}
+                          error={crossoverCellError(cross1h, row.error)}
+                        />
                       </td>
                     </tr>
                   );

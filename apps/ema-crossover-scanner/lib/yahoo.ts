@@ -319,11 +319,17 @@ async function fetchYahooHourlyBarsOnce(symbol: string, days: number): Promise<O
     if (!isRetryableYahooError(v8Err)) throw v8Err;
     await sleep(300);
     try {
-      return await fetchYahooFinance2HourlyBars(symbol, days, YAHOO_TIMEOUT_MS);
-    } catch (libErr) {
-      if (!isRetryableYahooError(libErr)) throw libErr;
+      return await fetchYahooSparkHourlyBars(symbol, days, YAHOO_TIMEOUT_MS);
+    } catch (sparkErr) {
+      if (!isRetryableYahooError(sparkErr)) throw sparkErr;
       await sleep(400);
-      return fetchYahooChartV8Direct(symbol, days, YAHOO_RETRY_TIMEOUT_MS);
+      try {
+        return await fetchYahooChartV8Range(symbol, days, YAHOO_TIMEOUT_MS);
+      } catch (rangeErr) {
+        if (!isRetryableYahooError(rangeErr)) throw rangeErr;
+        await sleep(500);
+        return fetchYahooFinance2HourlyBars(symbol, days, YAHOO_RETRY_TIMEOUT_MS);
+      }
     }
   }
 }
@@ -539,6 +545,109 @@ function sessionAwarePrice(prices: DailyChangeQuotePrices): number | null {
   }
 }
 
+function parseQuoteMetaFromRecord(raw: Record<string, unknown>): {
+  name: string | null;
+  price: number | null;
+  exchange: string | null;
+  quoteExchange: string | null;
+  dailyChange: number | null;
+} & QuoteSessionChanges {
+  const prices = quotePrices(raw);
+  const sessionChanges = filterSessionChangesForMarket(computeSessionChanges(raw));
+  const dailyFromPrices = computeDailyChangeFromPrices(prices);
+  const dailyFromQuote =
+    typeof raw.regularMarketChangePercent === "number"
+      ? raw.regularMarketChangePercent
+      : null;
+
+  const longName =
+    typeof raw.longName === "string"
+      ? raw.longName
+      : typeof raw.shortName === "string"
+        ? raw.shortName
+        : null;
+
+  return {
+    name: longName,
+    price: sessionAwarePrice(prices),
+    exchange:
+      (typeof raw.fullExchangeName === "string" ? raw.fullExchangeName : null) ??
+      (typeof raw.exchange === "string" ? raw.exchange : null),
+    quoteExchange: typeof raw.exchange === "string" ? raw.exchange : null,
+    dailyChange: dailyFromPrices ?? dailyFromQuote,
+    ...sessionChanges,
+  };
+}
+
+/** Lightweight v8 chart meta — works when yahoo-finance2 quote is throttled. */
+async function fetchQuoteMetaViaV8Chart(symbol: string): Promise<
+  | ({
+      name: string | null;
+      price: number | null;
+      exchange: string | null;
+      quoteExchange: string | null;
+      dailyChange: number | null;
+    } & QuoteSessionChanges)
+  | null
+> {
+  const url = new URL(
+    `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}`,
+  );
+  url.searchParams.set("interval", "1d");
+  url.searchParams.set("range", "1d");
+  url.searchParams.set("includePrePost", "true");
+
+  const body = await withTimeout(
+    fetch(url, {
+      headers: { "User-Agent": YAHOO_USER_AGENTS[0] },
+      cache: "no-store",
+    }).then(async (res) => {
+      if (!res.ok) {
+        throw new Error(`Yahoo v8 quote HTTP ${res.status} for ${symbol}`);
+      }
+      return res.json() as Promise<{
+        chart?: {
+          result?: Array<{
+            meta?: Record<string, unknown>;
+          }>;
+        };
+      }>;
+    }),
+    YAHOO_TIMEOUT_MS,
+    `Yahoo v8 quote for ${symbol}`,
+  );
+
+  const meta = body.chart?.result?.[0]?.meta;
+  if (!meta) return null;
+
+  const raw: Record<string, unknown> = {
+    ...meta,
+    regularMarketPreviousClose:
+      meta.chartPreviousClose ?? meta.previousClose ?? meta.regularMarketPreviousClose,
+    regularMarketPrice: meta.regularMarketPrice ?? meta.currentPrice,
+    preMarketPrice: meta.preMarketPrice,
+    postMarketPrice: meta.postMarketPrice,
+    longName: meta.longName ?? meta.shortName,
+    fullExchangeName: meta.fullExchangeName ?? meta.exchangeName,
+    exchange: meta.exchangeName ?? meta.exchange,
+  };
+
+  const parsed = parseQuoteMetaFromRecord(raw);
+  if (parsed.price == null && parsed.preMarketChange == null) return null;
+  return parsed;
+}
+
+const EMPTY_QUOTE_META = {
+  name: null,
+  price: null,
+  exchange: null,
+  quoteExchange: null,
+  dailyChange: null,
+  preMarketChange: null,
+  regularMarketChange: null,
+  postMarketChange: null,
+} as const;
+
 export async function fetchQuoteMeta(symbol: string): Promise<{
   name: string | null;
   price: number | null;
@@ -563,35 +672,22 @@ export async function fetchQuoteMeta(symbol: string): Promise<{
         },
       ),
     );
-    const raw = quote as unknown as Record<string, unknown>;
-    const prices = quotePrices(raw);
-    const sessionChanges = filterSessionChangesForMarket(
-      computeSessionChanges(raw),
-    );
-    const dailyFromPrices = computeDailyChangeFromPrices(prices);
-    const dailyFromQuote =
-      typeof raw.regularMarketChangePercent === "number"
-        ? raw.regularMarketChangePercent
-        : null;
-
-    return {
-      name: quote.longName ?? quote.shortName ?? null,
-      price: sessionAwarePrice(prices),
-      exchange: quote.fullExchangeName ?? quote.exchange ?? null,
-      quoteExchange: quote.exchange ?? null,
-      dailyChange: dailyFromPrices ?? dailyFromQuote,
-      ...sessionChanges,
-    };
+    return parseQuoteMetaFromRecord(quote as unknown as Record<string, unknown>);
   } catch {
-    return {
-      name: null,
-      price: null,
-      exchange: null,
-      quoteExchange: null,
-      dailyChange: null,
-      preMarketChange: null,
-      regularMarketChange: null,
-      postMarketChange: null,
-    };
+    try {
+      const viaV8 = await yahooLimiter.run(() =>
+        retryWithBackoff(() => fetchQuoteMetaViaV8Chart(symbol), {
+          attempts: 2,
+          baseDelayMs: 600,
+          label: `Yahoo v8 quote for ${symbol}`,
+          shouldRetry: isRetryableYahooError,
+        }),
+      );
+      if (viaV8) return viaV8;
+    } catch {
+      // fall through to empty meta
+    }
+
+    return { ...EMPTY_QUOTE_META };
   }
 }

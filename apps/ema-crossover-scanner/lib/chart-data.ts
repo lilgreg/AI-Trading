@@ -134,8 +134,30 @@ function backupProviders(): ChartProvider[] {
   ];
 }
 
+function isTailSymbol(options: FetchHourlyBarsOptions = {}): boolean {
+  return (
+    options.symbolIndex != null && options.symbolIndex >= CHART_TAIL_SYMBOL_INDEX
+  );
+}
+
+function configuredBackupProviders(): ChartProvider[] {
+  return backupProviders().filter((p) => !p.enabled || p.enabled());
+}
+
 function allProviders(options: FetchHourlyBarsOptions = {}): ChartProvider[] {
-  return [...yahooProviders(options), ...backupProviders()];
+  const yahoo = yahooProviders(options);
+  const backups = configuredBackupProviders();
+
+  // When Finnhub (or another configured backup) exists, try it before Yahoo for tail
+  // symbols that hit rate limits after ~120 requests. Skip Stooq-first — it often
+  // hits a bot wall and adds latency without helping when no API key is set.
+  if (isTailSymbol(options) && backups.some((p) => p.name === "finnhub")) {
+    const finnhub = backups.filter((p) => p.name === "finnhub");
+    const rest = backups.filter((p) => p.name !== "finnhub");
+    return [...finnhub, ...yahoo, ...rest];
+  }
+
+  return [...yahoo, ...backups];
 }
 
 function logMissingFinnhubHint(errors: string[]): void {
