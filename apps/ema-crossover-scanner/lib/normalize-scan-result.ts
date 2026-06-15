@@ -94,7 +94,7 @@ export function normalizeCachedResponse(
     stale: payload?.stale ?? true,
     scanInProgress: payload?.scanInProgress ?? false,
     cacheEmpty: payload?.cacheEmpty ?? results.length === 0,
-    staleAfterMinutes: payload?.staleAfterMinutes ?? 30,
+    staleAfterMinutes: payload?.staleAfterMinutes ?? 15,
     lastError: payload?.lastError ?? null,
     scanStartedAt: payload?.scanStartedAt ?? null,
   };

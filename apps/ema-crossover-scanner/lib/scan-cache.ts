@@ -27,8 +27,8 @@ let memoryLockUntil = 0;
 let lastError: string | null = null;
 
 export function getStaleAfterMs(): number {
-  const minutes = Number(process.env.SCAN_STALE_MINUTES ?? 30);
-  if (!Number.isFinite(minutes) || minutes < 5) return 30 * 60 * 1000;
+  const minutes = Number(process.env.SCAN_STALE_MINUTES ?? 15);
+  if (!Number.isFinite(minutes) || minutes < 5) return 15 * 60 * 1000;
   return minutes * 60 * 1000;
 }
 

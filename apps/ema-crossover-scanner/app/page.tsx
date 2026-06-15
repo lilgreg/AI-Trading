@@ -8,9 +8,14 @@ import {
   normalizePatterns,
 } from "@/lib/normalize-scan-result";
 import { patternSortKey } from "@/lib/pattern-sort";
+import { applyQuoteUpdates } from "@/lib/quote-updates";
 import { StockLogo } from "@/components/stock-logo";
-import type { CachedScanResponse, CrossoverDisplay, PatternDetection } from "@/lib/types";
-import type { StockScanResult } from "@/lib/types";
+import type {
+  CachedScanResponse,
+  CrossoverDisplay,
+  PatternDetection,
+  StockScanResult,
+} from "@/lib/types";
 
 type SortKey = "session" | "patterns" | "cross1h" | "cross4h";
 type SortDir = "asc" | "desc";
@@ -42,11 +47,11 @@ function formatSessionChange(value: number | null): string {
   return `${sign}${value.toFixed(2)}%`;
 }
 
-function formatCacheAge(scannedAt: string | null): string {
+function formatScanDataAge(scannedAt: string | null): string {
   if (!scannedAt) return "never";
   const ms = Date.now() - new Date(scannedAt).getTime();
   if (ms < 60_000) return "just now";
-  return formatMsAgo(ms);
+  return `${formatMsAgo(ms)} ago`;
 }
 
 function SessionChangesCell({ row }: { row: StockScanResult }) {
@@ -218,7 +223,21 @@ function sortIndicator(active: boolean, dir: SortDir): string {
   return dir === "asc" ? " ↑" : " ↓";
 }
 
-const POLL_MS = 30_000;
+const STATUS_POLL_MS = 60_000;
+const QUOTES_POLL_MS = 45_000;
+const NEWS_POLL_MS = 75_000;
+const SCAN_POLL_MS = 30_000;
+
+interface NewsHeadline {
+  symbol: string;
+  displayTicker: string;
+  headline: string;
+  publisher: string;
+  url: string;
+  publishedAt: string;
+  msAgo: number;
+  timeAgo: string;
+}
 
 export default function HomePage() {
   const [data, setData] = useState<CachedScanResponse | null>(null);
@@ -228,7 +247,14 @@ export default function HomePage() {
   const [onlyAbove, setOnlyAbove] = useState(false);
   const [sortKey, setSortKey] = useState<SortKey>("cross4h");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
+  const [quotesLive, setQuotesLive] = useState(false);
+  const [newsHeadlines, setNewsHeadlines] = useState<NewsHeadline[]>([]);
+  const [newsSymbolCount, setNewsSymbolCount] = useState(0);
+  const [newsLoading, setNewsLoading] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const statusPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const quotesPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const newsPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const fetchCache = useCallback(async (options?: { quiet?: boolean }) => {
     if (!options?.quiet) setLoading(true);
@@ -271,25 +297,146 @@ export default function HomePage() {
     }
   }, []);
 
+  const pollScanStatus = useCallback(async () => {
+    try {
+      const res = await fetch("/api/scan?status=true", { cache: "no-store" });
+      if (!res.ok) return;
+
+      const status = (await res.json()) as Partial<CachedScanResponse> & {
+        scannedAt?: string | null;
+      };
+
+      setData((prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          stale: status.stale ?? prev.stale,
+          scanInProgress: status.scanInProgress ?? prev.scanInProgress,
+          cacheEmpty: status.cacheEmpty ?? prev.cacheEmpty,
+          scanStartedAt: status.scanStartedAt ?? prev.scanStartedAt,
+          lastError: status.lastError ?? prev.lastError,
+          staleAfterMinutes: status.staleAfterMinutes ?? prev.staleAfterMinutes,
+        };
+      });
+
+      if (status.scanInProgress) {
+        void fetchCache({ quiet: true });
+      } else if (status.stale || status.cacheEmpty) {
+        void fetchCache({ quiet: true });
+      }
+    } catch {
+      // ignore background status poll errors
+    }
+  }, [fetchCache]);
+
+  const pollNews = useCallback(async (options?: { quiet?: boolean }) => {
+    if (!options?.quiet) setNewsLoading(true);
+    try {
+      const res = await fetch("/api/news", { cache: "no-store" });
+      if (!res.ok) return;
+
+      const body = (await res.json()) as {
+        headlines?: NewsHeadline[];
+        symbolCount?: number;
+      };
+
+      setNewsHeadlines(body.headlines ?? []);
+      setNewsSymbolCount(body.symbolCount ?? 0);
+    } catch {
+      // ignore background news poll errors
+    } finally {
+      if (!options?.quiet) setNewsLoading(false);
+    }
+  }, []);
+
+  const pollQuotes = useCallback(async () => {
+    try {
+      const res = await fetch("/api/quotes", { cache: "no-store" });
+      if (!res.ok) return;
+
+      const body = (await res.json()) as {
+        quotes?: Array<{
+          symbol: string;
+          price: number | null;
+          preMarketChange: number | null;
+          regularMarketChange: number | null;
+          postMarketChange: number | null;
+        }>;
+      };
+
+      if (!body.quotes?.length) return;
+
+      setQuotesLive(true);
+      setData((prev) => {
+        if (!prev?.results?.length) return prev;
+        return {
+          ...prev,
+          results: applyQuoteUpdates(prev.results, body.quotes!),
+        };
+      });
+    } catch {
+      // ignore background quote poll errors
+    }
+  }, []);
+
   useEffect(() => {
     void fetchCache();
   }, [fetchCache]);
 
   useEffect(() => {
-    if (pollRef.current) clearInterval(pollRef.current);
+    if (statusPollRef.current) clearInterval(statusPollRef.current);
+    if (!data) return;
 
-    const shouldPoll =
-      data?.scanInProgress || data?.stale || data?.cacheEmpty;
-    if (!shouldPoll) return;
+    void pollScanStatus();
+    statusPollRef.current = setInterval(() => {
+      void pollScanStatus();
+    }, STATUS_POLL_MS);
+
+    return () => {
+      if (statusPollRef.current) clearInterval(statusPollRef.current);
+    };
+  }, [data?.scannedAt, data?.cacheEmpty, pollScanStatus]);
+
+  useEffect(() => {
+    if (quotesPollRef.current) clearInterval(quotesPollRef.current);
+    if (!data || data.cacheEmpty) return;
+
+    void pollQuotes();
+    quotesPollRef.current = setInterval(() => {
+      void pollQuotes();
+    }, QUOTES_POLL_MS);
+
+    return () => {
+      if (quotesPollRef.current) clearInterval(quotesPollRef.current);
+    };
+  }, [data?.cacheEmpty, pollQuotes]);
+
+  useEffect(() => {
+    if (newsPollRef.current) clearInterval(newsPollRef.current);
+    if (!data || data.cacheEmpty) return;
+
+    void pollNews({ quiet: true });
+    newsPollRef.current = setInterval(() => {
+      void pollNews({ quiet: true });
+    }, NEWS_POLL_MS);
+
+    return () => {
+      if (newsPollRef.current) clearInterval(newsPollRef.current);
+    };
+  }, [data?.cacheEmpty, pollNews]);
+
+  useEffect(() => {
+    if (pollRef.current) clearInterval(pollRef.current);
+    if (!data?.scanInProgress) return;
 
     pollRef.current = setInterval(() => {
       void fetchCache({ quiet: true });
-    }, POLL_MS);
+    }, SCAN_POLL_MS);
 
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);
     };
-  }, [data?.scanInProgress, data?.stale, data?.cacheEmpty, fetchCache]);
+  }, [data?.scanInProgress, fetchCache]);
 
   const handleSort = (key: SortKey) => {
     if (sortKey === key) {
@@ -369,8 +516,8 @@ export default function HomePage() {
           20 EMA × 50 EMA Crossover Rank
         </h1>
         <p className="mt-2 max-w-2xl text-[var(--muted)]">
-          Precomputed server scan — opens instantly from cache. Cross 4h and Cross 1h
-          columns show each timeframe independently (times in your local timezone).
+          EMA crossovers and patterns come from a server scan (minutes to refresh).
+          Price and session % update live via lightweight quote polling.
         </p>
       </header>
 
@@ -386,8 +533,9 @@ export default function HomePage() {
               Only show 20 &gt; 50 now (client filter)
             </label>
             <p className="text-xs text-[var(--muted)]">
-              Server scan uses <code className="mono">TRADINGVIEW_WATCHLIST_URL</code>{" "}
-              and <code className="mono">WATCHLIST_SYMBOLS</code> from Vercel env.
+              Server scan merges built-in blue chips (~190) with{" "}
+              <code className="mono">TRADINGVIEW_WATCHLIST_URL</code> and optional{" "}
+              <code className="mono">WATCHLIST_SYMBOLS</code>.
             </p>
           </div>
 
@@ -440,17 +588,59 @@ export default function HomePage() {
           </div>
         )}
         <div className="card px-4 py-2">
-          <span className="text-[var(--muted)]">Cache</span>{" "}
+          <span className="text-[var(--muted)]">Scan data</span>{" "}
           <span className="font-semibold">
-            {formatCacheAge(data?.scannedAt ?? null)}
+            {formatScanDataAge(data?.scannedAt ?? null)}
           </span>
           {data?.stale && !data.scanInProgress && (
             <span className="ml-2 text-[var(--amber)]">stale</span>
           )}
           {data?.scanInProgress && (
-            <span className="ml-2 text-[var(--accent)]">updating…</span>
+            <span className="ml-2 text-[var(--accent)]">Updating…</span>
+          )}
+          {quotesLive && !data?.cacheEmpty && (
+            <span className="ml-2 text-[var(--green)]">· Prices updating live</span>
           )}
         </div>
+      </section>
+
+      <section className="card mb-4 p-4">
+        <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
+          <h2 className="text-sm font-medium text-[var(--text)]">
+            News · Recent EMA crosses (1h/4h)
+          </h2>
+          <span className="text-xs text-[var(--muted)]">
+            {newsLoading && newsHeadlines.length === 0
+              ? "Loading headlines…"
+              : newsSymbolCount > 0
+                ? `${newsSymbolCount} crossed symbols · ${newsHeadlines.length} headlines · refreshes every ~75s`
+                : "No qualifying crosses yet"}
+          </span>
+        </div>
+        {newsHeadlines.length > 0 ? (
+          <div className="news-row">
+            {newsHeadlines.map((item) => (
+              <a
+                key={`${item.symbol}-${item.url}`}
+                href={item.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="news-chip"
+              >
+                <div className="news-chip-ticker">{item.displayTicker}</div>
+                <div className="news-chip-headline">{item.headline}</div>
+                <div className="news-chip-meta">
+                  {item.timeAgo} · {item.publisher}
+                </div>
+              </a>
+            ))}
+          </div>
+        ) : (
+          <p className="text-sm text-[var(--muted)]">
+            Headlines appear when symbols have 20 &gt; 50 on 4h and a recent bullish
+            1h or 4h crossover.
+          </p>
+        )}
       </section>
 
       <section className="card overflow-hidden">
@@ -584,10 +774,12 @@ export default function HomePage() {
       <footer className="mt-8 text-xs text-[var(--muted)]">
         Price data via Yahoo Finance (1h bars, aggregated to 4h). Pattern labels are
         algorithmic approximations on 1h/4h bars (40-day window) — confirmed Active
-        patterns require neckline break; not TradingView auto-chart-patterns. Server
-        refreshes cache every 30 min via Vercel Cron; page polls while a scan runs.
-        Cross requires 20 EMA to cross below 50 before crossing back above. Not
-        financial advice.
+        patterns require neckline break; not TradingView auto-chart-patterns. Full
+        EMA/pattern rescans take several minutes; prices and session % refresh every
+        ~45s. When scan data is older than 15 min the client triggers a background
+        rescan (Vercel Hobby cron is daily). Tick-by-tick live data would need a
+        different architecture. Cross requires 20 EMA to cross below 50 before crossing
+        back above. Not financial advice.
       </footer>
     </main>
   );

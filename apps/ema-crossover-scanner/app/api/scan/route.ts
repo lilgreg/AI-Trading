@@ -26,6 +26,11 @@ export async function GET(request: NextRequest) {
   let status = await buildCacheStatus(snapshot);
 
   if (statusOnly) {
+    if (status.stale && !status.scanInProgress) {
+      void ensureFreshScan({});
+      status = await buildCacheStatus(snapshot);
+    }
+
     return NextResponse.json({
       scannedAt: snapshot?.scannedAt ?? null,
       completedAt: snapshot?.completedAt ?? null,
