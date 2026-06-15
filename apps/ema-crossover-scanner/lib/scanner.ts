@@ -2,14 +2,18 @@ import {
   findMostRecentBullishCrossover,
   formatCrossoverDateTime,
   latestEmaValues,
+  type CrossoverInfo,
 } from "./ema";
-import type { ScanInterval } from "./intervals";
 import { evaluateAllPatterns, NONE_PATTERNS } from "./patterns";
 import {
   resolveTradingViewSymbol,
   tradingViewChartUrl,
 } from "./stocks";
-import type { ParsedSymbol, StockScanResult } from "./types";
+import type {
+  CrossoverDisplay,
+  ParsedSymbol,
+  StockScanResult,
+} from "./types";
 import {
   aggregateHourlyTo4h,
   fetchHourlyBars,
@@ -18,11 +22,24 @@ import {
 
 const FAST_EMA = 20;
 const SLOW_EMA = 50;
+/** Parallel Yahoo fetches per batch — raised cautiously from 8. */
+export const SCAN_BATCH_SIZE = 14;
+
+function buildCrossoverDisplay(cross: CrossoverInfo | null): CrossoverDisplay {
+  if (!cross) {
+    return { crossoverDate: null, crossoverTime: null, crossoverMsAgo: null };
+  }
+  const formatted = formatCrossoverDateTime(cross.date);
+  return {
+    crossoverDate: formatted.crossoverDate,
+    crossoverTime: formatted.crossoverTime,
+    crossoverMsAgo: cross.msAgo,
+  };
+}
 
 export async function scanSymbol(
   parsed: ParsedSymbol,
   historyDays: number,
-  interval: ScanInterval,
   includePatternDebug = false,
 ): Promise<StockScanResult> {
   const tvSymbol = resolveTradingViewSymbol(parsed);
@@ -45,11 +62,9 @@ export async function scanSymbol(
     ema20: null,
     ema50: null,
     ema20Above50: false,
-    crossoverDate: null,
-    crossoverTime: null,
-    crossoverMsAgo: null,
-    crossoverDaysAgo: null,
-    tradingViewUrl: tradingViewChartUrl(tvSymbol, interval),
+    cross1h: { crossoverDate: null, crossoverTime: null, crossoverMsAgo: null },
+    cross4h: { crossoverDate: null, crossoverTime: null, crossoverMsAgo: null },
+    tradingViewUrl: tradingViewChartUrl(tvSymbol, "4h"),
   };
 
   try {
@@ -57,7 +72,6 @@ export async function scanSymbol(
       fetchHourlyBars(parsed.yahoo, historyDays),
       fetchQuoteMeta(parsed.yahoo),
     ]);
-    const bars = interval === "1h" ? hourly : aggregateHourlyTo4h(hourly);
     const bars4h = aggregateHourlyTo4h(hourly);
 
     const resolvedTv = resolveTradingViewSymbol(parsed, meta.quoteExchange);
@@ -66,9 +80,9 @@ export async function scanSymbol(
       : resolvedTv;
     base.displaySymbol = resolvedTv;
     base.tradingViewSymbol = resolvedTv;
-    base.tradingViewUrl = tradingViewChartUrl(resolvedTv, interval);
+    base.tradingViewUrl = tradingViewChartUrl(resolvedTv, "4h");
 
-    if (bars.length < SLOW_EMA + 5) {
+    if (bars4h.length < SLOW_EMA + 5 || hourly.length < SLOW_EMA + 5) {
       return {
         ...base,
         ...meta,
@@ -76,26 +90,19 @@ export async function scanSymbol(
       };
     }
 
-    const closes = bars.map((b) => b.close);
+    const closes4h = bars4h.map((b) => b.close);
     const { emaFast, emaSlow, fastAboveSlow } = latestEmaValues(
-      closes,
+      closes4h,
       FAST_EMA,
       SLOW_EMA,
     );
-    const crossover = findMostRecentBullishCrossover(bars, FAST_EMA, SLOW_EMA);
 
-    let crossoverDate: string | null = null;
-    let crossoverTime: string | null = null;
-    let crossoverMsAgo: number | null = null;
-    let crossoverDaysAgo: number | null = null;
-
-    if (crossover) {
-      const formatted = formatCrossoverDateTime(crossover.date);
-      crossoverDate = formatted.crossoverDate;
-      crossoverTime = formatted.crossoverTime;
-      crossoverMsAgo = crossover.msAgo;
-      crossoverDaysAgo = Math.round(crossover.msAgo / (1000 * 60 * 60 * 24));
-    }
+    const cross1h = buildCrossoverDisplay(
+      findMostRecentBullishCrossover(hourly, FAST_EMA, SLOW_EMA),
+    );
+    const cross4h = buildCrossoverDisplay(
+      findMostRecentBullishCrossover(bars4h, FAST_EMA, SLOW_EMA),
+    );
 
     const patterns = evaluateAllPatterns(hourly, bars4h, meta.price, includePatternDebug);
 
@@ -106,10 +113,8 @@ export async function scanSymbol(
       ema20: emaFast,
       ema50: emaSlow,
       ema20Above50: fastAboveSlow,
-      crossoverDate,
-      crossoverTime,
-      crossoverMsAgo,
-      crossoverDaysAgo,
+      cross1h,
+      cross4h,
       patterns,
     };
   } catch (err) {
@@ -118,35 +123,47 @@ export async function scanSymbol(
   }
 }
 
+export interface ScanProgressCallbacks {
+  onResult?: (result: StockScanResult) => void;
+}
+
 export async function scanSymbols(
   symbols: ParsedSymbol[],
   historyDays: number,
-  interval: ScanInterval,
   includePatternDebug = false,
+  callbacks: ScanProgressCallbacks = {},
 ): Promise<StockScanResult[]> {
-  const batchSize = 8;
   const results: StockScanResult[] = [];
 
-  for (let i = 0; i < symbols.length; i += batchSize) {
-    const batch = symbols.slice(i, i + batchSize);
+  for (let i = 0; i < symbols.length; i += SCAN_BATCH_SIZE) {
+    const batch = symbols.slice(i, i + SCAN_BATCH_SIZE);
     const batchResults = await Promise.all(
-      batch.map((s) => scanSymbol(s, historyDays, interval, includePatternDebug)),
+      batch.map((s) => scanSymbol(s, historyDays, includePatternDebug)),
     );
-    results.push(...batchResults);
+    for (const result of batchResults) {
+      results.push(result);
+      callbacks.onResult?.(result);
+    }
   }
 
   return sortByRecentCrossover(results);
 }
 
-/** Most recent 20/50 bullish cross first; symbols without a cross sort last */
+/** Most recent 4h bullish cross first; symbols without a cross sort last */
 export function sortByRecentCrossover(results: StockScanResult[]): StockScanResult[] {
   return [...results].sort((a, b) => {
-    const aHas = a.crossoverMsAgo != null;
-    const bHas = b.crossoverMsAgo != null;
+    const aHas = a.cross4h.crossoverMsAgo != null;
+    const bHas = b.cross4h.crossoverMsAgo != null;
 
-    if (aHas && bHas) return a.crossoverMsAgo! - b.crossoverMsAgo!;
+    if (aHas && bHas) return a.cross4h.crossoverMsAgo! - b.cross4h.crossoverMsAgo!;
     if (aHas) return -1;
     if (bHas) return 1;
+
+    const a1h = a.cross1h.crossoverMsAgo;
+    const b1h = b.cross1h.crossoverMsAgo;
+    if (a1h != null && b1h != null) return a1h - b1h;
+    if (a1h != null) return -1;
+    if (b1h != null) return 1;
 
     if (a.ema20Above50 !== b.ema20Above50) {
       return a.ema20Above50 ? -1 : 1;

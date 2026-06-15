@@ -101,5 +101,10 @@ export function detectDoubleTop(
     pattern,
     price,
     params.maxRecencyBars,
+    {
+      minBarsAfterConfirm: 3,
+      maxBarsAfterConfirm: tf === "4h" ? 32 : 42,
+      requireBreakdownForActive: tf === "4h",
+    },
   );
 }

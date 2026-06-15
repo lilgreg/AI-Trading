@@ -1,29 +1,48 @@
 # EMA Crossover Scanner
 
-Rank stocks by how recently the **20 EMA crossed above the 50 EMA** — built for TradingView workflows with a deploy-ready Next.js dashboard.
+Rank stocks by how recently the **20 EMA crossed above the 50 EMA** — with **instant load** from a server-precomputed cache.
 
 ## What it does
 
-- Scans a default **blue-chip** universe (AAPL, MSFT, NVDA, etc.)
-- Merges in **your TradingView watchlist** (paste or upload `.txt` export)
-- Computes daily 20/50 EMAs from Yahoo Finance OHLC data
-- Sorts by **most recent bullish crossover first**
+- Precomputes scans on the server (Vercel Cron every 30 min)
+- **Instant dashboard** — reads cached JSON snapshot in &lt;500ms
+- Dual cross columns: **Cross 1h** and **Cross 4h** (independent sort)
+- Merges **TradingView watchlist** + blue-chip defaults from env
+- Pattern detection on 1h/4h bars (DB, DT, IH&S — Active only in UI)
 - Links each row to **TradingView** for chart review
 
-## TradingView watchlist setup
+## Architecture
 
-TradingView does not expose a public REST API for personal watchlists. Use one of these:
+```
+Vercel Cron (*/30) ──► /api/cron/scan ──► runBackgroundScan()
+                                              │
+                                              ▼
+                                    saveSnapshot() ──► Vercel Blob (prod)
+                                              │        .cache/ (local dev)
+                                              ▼
+User opens app ──► GET /api/scan ──► loadSnapshot() ──► instant JSON
+                      │
+                      ├─ cache empty/stale? ──► kick off background scan
+                      └─ ?force=true ──► rescan async, return current cache
 
-1. **Export from TradingView** (recommended)
-   - Open your watchlist → **Advanced view** → **Download list as TXT**
-   - Upload the file in the dashboard, or paste the contents
+Client polls every 30s while scanInProgress or stale
+```
 
-2. **Environment variable** (for Vercel/production)
-   ```env
-   WATCHLIST_SYMBOLS=NASDAQ:AAPL,NYSE:JPM,NASDAQ:NVDA
-   ```
+### Cache layers
 
-Symbols can use TradingView format (`NASDAQ:AAPL`) or plain tickers (`AAPL`). Class shares like `BRK.B` are converted for Yahoo (`BRK-B`).
+1. **In-memory** — warm lambda reads (same instance)
+2. **Vercel Blob** — cross-instance persistence in production (`BLOB_READ_WRITE_TOKEN`)
+3. **Local file** — `.cache/scan-snapshot.json` for dev without Blob
+
+### Endpoints
+
+| Route | Purpose |
+|-------|---------|
+| `GET /api/scan` | Return cached snapshot + `{ stale, scanInProgress, cacheEmpty }` |
+| `GET /api/scan?force=true` | Return cache immediately, start background rescan |
+| `GET /api/scan?status=true` | Lightweight status poll |
+| `POST /api/scan` | Synchronous full scan (admin; may take minutes) |
+| `GET /api/cron/scan` | Cron job — protected by `CRON_SECRET` |
 
 ## Local development
 
@@ -31,51 +50,43 @@ Symbols can use TradingView format (`NASDAQ:AAPL`) or plain tickers (`AAPL`). Cl
 cd ema-crossover-scanner
 npm install
 cp .env.example .env.local
+# Populate TRADINGVIEW_WATCHLIST_URL and/or WATCHLIST_SYMBOLS
+
+# Seed cache (first run — takes a few minutes)
+npm run scan
+
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000).
+Open [http://localhost:3000](http://localhost:3000) — loads instantly from `.cache/scan-snapshot.json`.
 
-### Environment variables
+## Environment variables
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `WATCHLIST_SYMBOLS` | — | Comma/newline-separated symbols |
-| `INCLUDE_BLUE_CHIPS` | `true` | Include built-in large-cap list |
-| `HISTORY_DAYS` | `120` | Lookback for EMA calculation (60–365) |
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `TRADINGVIEW_WATCHLIST_URL` | recommended | — | Shared TV watchlist to merge |
+| `WATCHLIST_SYMBOLS` | optional | — | Extra comma/newline symbols |
+| `INCLUDE_BLUE_CHIPS` | | `true` | Include built-in large-cap list |
+| `HISTORY_DAYS` | | `120` | Lookback for EMA (60–365) |
+| `BLOB_READ_WRITE_TOKEN` | **Vercel prod** | — | Vercel Blob store for shared cache |
+| `CRON_SECRET` | **Vercel prod** | — | Bearer token for cron route |
+| `SCAN_STALE_MINUTES` | | `30` | Cache TTL before auto-refresh |
 
-## API
+## Deploy to Vercel
 
-`GET /api/scan`
+1. Push to GitHub and import in [Vercel](https://vercel.com/new)
+2. **Create a Blob store** (Storage → Blob) and connect `BLOB_READ_WRITE_TOKEN`
+3. Set env vars: `TRADINGVIEW_WATCHLIST_URL`, `CRON_SECRET`, `BLOB_READ_WRITE_TOKEN`
+4. Deploy — `vercel.json` registers cron: `*/30 * * * *` → `/api/cron/scan`
+5. Optionally trigger first scan: `curl -H "Authorization: Bearer $CRON_SECRET" https://YOUR_APP.vercel.app/api/cron/scan`
 
-Query params:
+### Vercel checklist
 
-- `watchlist` — inline symbol list (TradingView export text)
-- `symbols` — additional symbols
-- `blueChips=false` — skip default blue chips
-- `onlyAbove=true` — filter to stocks where 20 EMA > 50 EMA now
-- `days=120` — history window
-
-## Deploy to Vercel + GitHub
-
-1. Create a new GitHub repo and push this project:
-   ```bash
-   git add .
-   git commit -m "Initial EMA crossover scanner"
-   git remote add origin https://github.com/YOUR_USER/ema-crossover-scanner.git
-   git push -u origin main
-   ```
-
-2. Import the repo in [Vercel](https://vercel.com/new)
-3. Add env vars (`WATCHLIST_SYMBOLS`, etc.) in Project Settings
-4. Deploy — Vercel auto-detects Next.js
-
-## Roadmap ideas
-
-- [ ] Scheduled scans (Vercel Cron) + email/Slack alerts on new crosses
-- [ ] TradingView Lightweight Charts embed per symbol
-- [ ] Pine Script alert webhook ingestion
-- [ ] Optional TradingView Desktop bridge for live watchlist sync
+- [ ] Blob store created + token linked to project
+- [ ] `CRON_SECRET` set (random string; Vercel Cron sends it automatically when configured in dashboard)
+- [ ] `TRADINGVIEW_WATCHLIST_URL` set
+- [ ] Cron enabled on Pro plan (Hobby supports cron with limits)
+- [ ] Function max duration 300s (configured in `vercel.json`)
 
 ## Disclaimer
 

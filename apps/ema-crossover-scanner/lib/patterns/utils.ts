@@ -42,26 +42,26 @@ export function getBullishParams(tf: BarTimeframe): BullishPatternParams {
   if (tf === "4h") {
     return {
       swingWindow: 3,
-      minBarsBetween: 8,
-      maxBarsBetween: 50,
-      maxRecencyBars: 60,
-      lowTolerance: 0.01,
-      minNecklineLift: 0.04,
-      shoulderTolerance: 0.012,
-      minHeadDepth: 0.04,
-      maxPatternSpan: 60,
+      minBarsBetween: 10,
+      maxBarsBetween: 45,
+      maxRecencyBars: 55,
+      lowTolerance: 0.008,
+      minNecklineLift: 0.05,
+      shoulderTolerance: 0.01,
+      minHeadDepth: 0.045,
+      maxPatternSpan: 55,
     };
   }
   return {
     swingWindow: 3,
-    minBarsBetween: 12,
-    maxBarsBetween: 120,
-    maxRecencyBars: 240,
-    lowTolerance: 0.01,
-    minNecklineLift: 0.04,
-    shoulderTolerance: 0.012,
-    minHeadDepth: 0.05,
-    maxPatternSpan: 150,
+    minBarsBetween: 14,
+    maxBarsBetween: 110,
+    maxRecencyBars: 220,
+    lowTolerance: 0.008,
+    minNecklineLift: 0.045,
+    shoulderTolerance: 0.01,
+    minHeadDepth: 0.055,
+    maxPatternSpan: 140,
   };
 }
 
@@ -69,19 +69,19 @@ export function getBearishParams(tf: BarTimeframe): BearishPatternParams {
   if (tf === "4h") {
     return {
       swingWindow: 3,
-      minBarsBetween: 5,
-      maxBarsBetween: 55,
-      maxRecencyBars: 60,
-      highTolerance: 0.012,
-      minNecklineDrop: 0.03,
+      minBarsBetween: 8,
+      maxBarsBetween: 48,
+      maxRecencyBars: 55,
+      highTolerance: 0.007,
+      minNecklineDrop: 0.045,
     };
   }
   return {
     swingWindow: 3,
     minBarsBetween: 10,
-    maxBarsBetween: 140,
-    maxRecencyBars: 240,
-    highTolerance: 0.012,
+    maxBarsBetween: 130,
+    maxRecencyBars: 220,
+    highTolerance: 0.01,
     minNecklineDrop: 0.03,
   };
 }
@@ -183,9 +183,24 @@ export function hasNecklineBreakout(
   confirmIdx: number,
   neckline: number,
 ): boolean {
-  const threshold = neckline * 1.001;
+  const threshold = neckline * 1.002;
   for (let i = confirmIdx + 1; i < bars.length; i++) {
-    if (barClose(bars[i]) >= threshold || barHigh(bars[i]) >= threshold) {
+    if (barClose(bars[i]) >= threshold) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** After confirmation, price must close below neckline (breakdown) to qualify as Active. */
+export function hasNecklineBreakdown(
+  bars: OhlcBar[],
+  confirmIdx: number,
+  neckline: number,
+): boolean {
+  const threshold = neckline * 0.998;
+  for (let i = confirmIdx + 1; i < bars.length; i++) {
+    if (barClose(bars[i]) <= threshold) {
       return true;
     }
   }
@@ -201,7 +216,6 @@ export function evaluateBullishPatternStatus(
   currentPrice: number,
   maxRecencyBars: number,
   options: {
-    allowForming?: boolean;
     minAboveNeckline?: number;
     showTarget?: boolean;
     minBarsAfterConfirm?: number;
@@ -209,7 +223,6 @@ export function evaluateBullishPatternStatus(
   } = {},
 ): PatternEvalResult {
   const {
-    allowForming = false,
     minAboveNeckline = 1.005,
     showTarget = true,
     minBarsAfterConfirm = 3,
@@ -267,16 +280,7 @@ export function evaluateBullishPatternStatus(
     currentPrice < target &&
     hasNecklineBreakout(bars, confirmIdx, neckline);
 
-  const formingActive =
-    allowForming &&
-    targetHitIdx == null &&
-    failedIdx == null &&
-    currentPrice > support * 1.01 &&
-    currentPrice >= neckline * 0.9 &&
-    currentPrice <= neckline * 1.002 &&
-    currentPrice < target;
-
-  if (confirmedActive || formingActive) {
+  if (confirmedActive) {
     return { status: "Active", confirmMsAgo, levels: pattern };
   }
 
@@ -292,7 +296,17 @@ export function evaluateBearishPatternStatus(
   pattern: BearishPatternLevels,
   currentPrice: number,
   maxRecencyBars: number,
+  options: {
+    minBarsAfterConfirm?: number;
+    maxBarsAfterConfirm?: number;
+    requireBreakdownForActive?: boolean;
+  } = {},
 ): PatternEvalResult {
+  const {
+    minBarsAfterConfirm = 3,
+    maxBarsAfterConfirm = 50,
+    requireBreakdownForActive = false,
+  } = options;
   const { confirmIdx, resistance, neckline, target } = pattern;
 
   if (
@@ -302,13 +316,21 @@ export function evaluateBearishPatternStatus(
     return NONE_RESULT;
   }
 
+  const barsAfterConfirm = bars.length - 1 - confirmIdx;
+  if (
+    barsAfterConfirm < minBarsAfterConfirm ||
+    barsAfterConfirm > maxBarsAfterConfirm
+  ) {
+    return NONE_RESULT;
+  }
+
   const confirmMsAgo = msAgoFromBar(bars, confirmIdx);
   let targetHitIdx: number | null = null;
-  let failedIdx: number | null = null;
+  let reclaimedIdx: number | null = null;
 
-  for (let i = confirmIdx; i < bars.length; i++) {
-    if (barLow(bars[i]) < neckline * 0.999) {
-      failedIdx = i;
+  for (let i = confirmIdx + 1; i < bars.length; i++) {
+    if (barClose(bars[i]) > resistance * 1.005) {
+      reclaimedIdx = i;
       break;
     }
     if (barLow(bars[i]) <= target) {
@@ -318,9 +340,11 @@ export function evaluateBearishPatternStatus(
   }
 
   if (targetHitIdx == null && currentPrice <= target) targetHitIdx = bars.length - 1;
-  if (failedIdx == null && currentPrice < neckline * 0.999) failedIdx = bars.length - 1;
+  if (reclaimedIdx == null && currentPrice > resistance * 1.005) {
+    reclaimedIdx = bars.length - 1;
+  }
 
-  if (failedIdx != null && isWithinRecency(bars, failedIdx)) {
+  if (reclaimedIdx != null && isWithinRecency(bars, reclaimedIdx)) {
     return { status: "Failed", confirmMsAgo, levels: pattern };
   }
 
@@ -328,11 +352,28 @@ export function evaluateBearishPatternStatus(
     return NONE_RESULT;
   }
 
+  const hasBreakdown = hasNecklineBreakdown(bars, confirmIdx, neckline);
+
   if (
+    hasBreakdown &&
     targetHitIdx == null &&
-    failedIdx == null &&
-    currentPrice >= neckline &&
-    currentPrice <= resistance
+    reclaimedIdx == null &&
+    currentPrice <= neckline * 1.002 &&
+    currentPrice > target &&
+    currentPrice <= resistance * 1.01
+  ) {
+    return { status: "Active", confirmMsAgo, levels: pattern };
+  }
+
+  // Pre-breakdown: valid M-top with price retesting neckline/resistance zone.
+  if (
+    !requireBreakdownForActive &&
+    !hasBreakdown &&
+    targetHitIdx == null &&
+    reclaimedIdx == null &&
+    currentPrice >= neckline * 1.002 &&
+    currentPrice <= resistance * 0.998 &&
+    barHigh(bars[confirmIdx]) >= resistance * 0.995
   ) {
     return { status: "Active", confirmMsAgo, levels: pattern };
   }
@@ -364,7 +405,15 @@ export function mergeMultiTimeframe(
   let timeframes: PatternTimeframe;
   let confirmMsAgo: number | null;
 
-  if (
+  if (oneHour.status === "Active" && fourHour.status === "Active") {
+    status = "Active";
+    timeframes = "1h+4h";
+    confirmMsAgo = Math.min(
+      oneHour.confirmMsAgo ?? Number.MAX_SAFE_INTEGER,
+      fourHour.confirmMsAgo ?? Number.MAX_SAFE_INTEGER,
+    );
+    if (!Number.isFinite(confirmMsAgo)) confirmMsAgo = null;
+  } else if (
     oneHour.status !== "None" &&
     fourHour.status !== "None" &&
     oneHour.status === fourHour.status

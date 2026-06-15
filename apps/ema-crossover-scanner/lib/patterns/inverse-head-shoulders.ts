@@ -102,7 +102,6 @@ export function detectInverseHeadShoulders(
     price,
     params.maxRecencyBars,
     {
-      allowForming: false,
       minAboveNeckline: 1.02,
       showTarget: false,
       minBarsAfterConfirm: 5,

@@ -23,6 +23,18 @@ export interface SymbolPatterns {
   inverseHeadShoulders: PatternDetection;
 }
 
+export interface CrossoverDisplay {
+  crossoverDate: string | null;
+  crossoverTime: string | null;
+  crossoverMsAgo: number | null;
+}
+
+export const EMPTY_CROSSOVER: CrossoverDisplay = {
+  crossoverDate: null,
+  crossoverTime: null,
+  crossoverMsAgo: null,
+};
+
 export interface StockScanResult {
   symbol: string;
   /** Ticker only for UI (e.g. JNJ) */
@@ -41,22 +53,21 @@ export interface StockScanResult {
   postMarketChange: number | null;
   /** Recent chart patterns on 1h / 4h bars (40-day window) */
   patterns: SymbolPatterns;
+  /** 4h 20/50 EMA values (status column reference timeframe) */
   ema20: number | null;
   ema50: number | null;
   ema20Above50: boolean;
-  crossoverDate: string | null;
-  crossoverTime: string | null;
-  crossoverMsAgo: number | null;
-  crossoverDaysAgo: number | null;
+  /** Most recent bullish 20/50 cross on 1h bars */
+  cross1h: CrossoverDisplay;
+  /** Most recent bullish 20/50 cross on 4h bars */
+  cross4h: CrossoverDisplay;
   tradingViewUrl: string;
   error?: string;
 }
 
-export interface ScanResponse {
+export interface ScanMeta {
   scannedAt: string;
-  interval: "1h" | "4h";
   symbolCount: number;
-  results: StockScanResult[];
   sources: {
     blueChips: boolean;
     watchlist: boolean;
@@ -65,6 +76,21 @@ export interface ScanResponse {
   };
   tradingViewWatchlistName?: string;
 }
+
+export interface ScanResponse extends ScanMeta {
+  results: StockScanResult[];
+}
+
+export interface ScanCacheStatus {
+  stale: boolean;
+  scanInProgress: boolean;
+  cacheEmpty: boolean;
+  staleAfterMinutes: number;
+  lastError: string | null;
+  scanStartedAt: string | null;
+}
+
+export interface CachedScanResponse extends ScanResponse, ScanCacheStatus {}
 
 export interface ParsedSymbol {
   raw: string;

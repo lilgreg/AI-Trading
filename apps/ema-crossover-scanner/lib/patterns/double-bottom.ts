@@ -103,10 +103,9 @@ export function detectDoubleBottom(
     price,
     params.maxRecencyBars,
     {
-      allowForming: true,
       showTarget: true,
       minBarsAfterConfirm: 3,
-      maxBarsAfterConfirm: tf === "4h" ? 35 : 45,
+      maxBarsAfterConfirm: tf === "4h" ? 32 : 42,
     },
   );
 }
