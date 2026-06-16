@@ -89,29 +89,46 @@ export async function loadSnapshot(): Promise<ScanSnapshot | null> {
 
   const fromBlob = await readBlobJson<ScanSnapshot>(BLOB_PATHNAME);
   if (fromBlob?.results) {
-    memorySnapshot = sanitizeSnapshot(fromBlob);
+    memorySnapshot = await enrichSnapshot(fromBlob);
     return memorySnapshot;
   }
 
   const fromDisk = await readLocalJson<ScanSnapshot>(LOCAL_SNAPSHOT_PATH);
   if (fromDisk?.results) {
-    memorySnapshot = sanitizeSnapshot(fromDisk);
+    memorySnapshot = await enrichSnapshot(fromDisk);
     return memorySnapshot;
   }
 
   return null;
 }
 
-function sanitizeSnapshot(snapshot: ScanSnapshot): ScanSnapshot {
+async function enrichSnapshot(snapshot: ScanSnapshot): Promise<ScanSnapshot> {
+  let updated = sanitizeSnapshotResults(snapshot);
+  const { backfillSnapshotIndexes } = await import("./snapshot-enrich");
+  updated = await backfillSnapshotIndexes(updated);
+
+  const changed =
+    updated.results !== snapshot.results ||
+    updated.results.some(
+      (row, index) =>
+        row.error !== snapshot.results[index]?.error ||
+        row.universeIndex !== snapshot.results[index]?.universeIndex,
+    );
+
+  if (changed) {
+    void saveSnapshot(updated);
+  }
+
+  return updated;
+}
+
+function sanitizeSnapshotResults(snapshot: ScanSnapshot): ScanSnapshot {
   const sanitizedResults = sanitizeScanResults(snapshot.results);
   const changed = sanitizedResults.some(
     (row, index) => row.error !== snapshot.results[index]?.error,
   );
   if (!changed) return snapshot;
-
-  const updated = { ...snapshot, results: sanitizedResults };
-  void saveSnapshot(updated);
-  return updated;
+  return { ...snapshot, results: sanitizedResults };
 }
 
 export async function saveSnapshot(snapshot: ScanSnapshot): Promise<void> {
