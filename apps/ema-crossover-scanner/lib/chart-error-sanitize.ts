@@ -36,8 +36,9 @@ export function symbolsWithStaleChartErrors(
   return results
     .filter(
       (row) =>
-        isStaleChartError(row.error) ||
-        row.error === "Chart data refresh pending",
+        row.ema20 == null &&
+        (isStaleChartError(row.error) ||
+          row.error === "Chart data refresh pending"),
     )
     .map((row) => row.symbol);
 }

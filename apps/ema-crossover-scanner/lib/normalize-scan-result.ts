@@ -75,7 +75,10 @@ export function normalizeScanResult(row: LegacyScanRow): StockScanResult {
     logoUrl: row.logoUrl ?? null,
     dataSource: row.dataSource ?? null,
     universeIndex: row.universeIndex,
-    error: sanitizeChartError(row.error),
+    error:
+      row.ema20 != null && row.error === "Chart data refresh pending"
+        ? undefined
+        : sanitizeChartError(row.error),
   };
 }
 

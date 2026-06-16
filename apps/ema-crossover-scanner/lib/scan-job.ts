@@ -556,24 +556,37 @@ export async function scanAndMergeSymbol(
   const result = mergeScanResultPreservingQuotes(scanned, prior);
   const merged = { ...result, universeIndex: index };
 
-  if (snapshot?.configKey === configKey && snapshot.results?.length) {
-    const resultsBySymbol = new Map(
-      snapshot.results.map((row) => [row.symbol, row]),
-    );
-    resultsBySymbol.set(yahooSymbol, merged);
+  if (snapshot?.results?.length) {
+    if (snapshot.configKey === configKey) {
+      const resultsBySymbol = new Map(
+        snapshot.results.map((row) => [row.symbol, row]),
+      );
+      resultsBySymbol.set(yahooSymbol, merged);
 
-    const fallbackBySymbol = new Map(snapshot.results.map((row) => [row.symbol, row]));
-    const updated = buildSnapshot(
-      symbols,
-      resultsBySymbol,
-      fallbackBySymbol,
-      configKey,
-      sources,
-      tradingViewWatchlistName,
-      snapshot.scanComplete !== false,
-      snapshot.completedAt ?? null,
-    );
-    await saveSnapshot(updated);
+      const fallbackBySymbol = new Map(
+        snapshot.results.map((row) => [row.symbol, row]),
+      );
+      const updated = buildSnapshot(
+        symbols,
+        resultsBySymbol,
+        fallbackBySymbol,
+        configKey,
+        sources,
+        tradingViewWatchlistName,
+        snapshot.scanComplete !== false,
+        snapshot.completedAt ?? null,
+      );
+      await saveSnapshot(updated);
+    } else {
+      const results = snapshot.results.map((row) =>
+        row.symbol === yahooSymbol ? merged : row,
+      );
+      await saveSnapshot({
+        ...snapshot,
+        results,
+        lastSavedAt: new Date().toISOString(),
+      });
+    }
     setScanError(null);
   }
 
