@@ -1,11 +1,23 @@
-/** Loop production heal until unscanned and chart-pending = 0. Run: npx tsx scripts/heal-prod.ts */
+/** Loop production heal until success criteria pass. Run: npx tsx scripts/heal-prod.ts */
 const BASE = process.env.PROD_URL ?? "https://ai-trading-scanner.vercel.app";
-const MAX_ROUNDS = Number(process.env.HEAL_ROUNDS ?? 30);
-const PAUSE_MS = Number(process.env.HEAL_PAUSE_MS ?? 15_000);
+const MAX_ROUNDS = Number(process.env.HEAL_ROUNDS ?? 50);
+const PAUSE_MS = Number(process.env.HEAL_PAUSE_MS ?? 20_000);
+
+const BAD_ERRORS = new Set([
+  "Not scanned yet",
+  "Chart data refresh pending",
+  "No chart data available",
+  "Insufficient price history for EMA calculation",
+]);
 
 interface HealCounts {
   unscanned: number;
   chartRefreshPending: number;
+  badErrors: number;
+  withReg: number;
+  total: number;
+  scanComplete: boolean;
+  scanInProgress: boolean;
 }
 
 async function fetchHealCounts(): Promise<HealCounts> {
@@ -15,30 +27,29 @@ async function fetchHealCounts(): Promise<HealCounts> {
   try {
     data = JSON.parse(text) as Record<string, unknown>;
   } catch {
-    throw new Error(
-      `Heal request failed (${res.status}): ${text.slice(0, 120)}`,
-    );
+    throw new Error(`Heal request failed (${res.status}): ${text.slice(0, 120)}`);
   }
-  const results = (data.results as { error?: string }[]) ?? [];
-  const unscanned =
-    data.unscannedCount ??
-    results.filter((r: { error?: string }) => r.error === "Not scanned yet").length;
-  const chartRefreshPending =
-    data.chartRefreshPendingCount ??
-    results.filter(
-      (r: { error?: string }) => r.error === "Chart data refresh pending",
-    ).length;
 
-  const row0 = results[0];
-  const withPre = results.filter(
-    (r: { preMarketChange?: number | null }) => r.preMarketChange != null,
-  ).length;
-  const withPost = results.filter(
-    (r: { postMarketChange?: number | null }) => r.postMarketChange != null,
-  ).length;
+  const results = (data.results as { error?: string; regularMarketChange?: number | null }[]) ?? [];
+  const unscanned =
+    (data.unscannedCount as number) ??
+    results.filter((r) => r.error === "Not scanned yet").length;
+  const chartRefreshPending =
+    (data.chartRefreshPendingCount as number) ??
+    results.filter((r) => r.error === "Chart data refresh pending").length;
+  const badErrors = results.filter((r) => r.error && BAD_ERRORS.has(r.error)).length;
+  const withReg = results.filter((r) => r.regularMarketChange != null).length;
+  const total = results.length;
+  const regPct = total ? ((withReg / total) * 100).toFixed(1) : "0";
 
   console.log(
     new Date().toISOString(),
+    "total:",
+    total,
+    "reg:",
+    `${withReg} (${regPct}%)`,
+    "badErrors:",
+    badErrors,
     "unscanned:",
     unscanned,
     "chartPending:",
@@ -47,20 +58,35 @@ async function fetchHealCounts(): Promise<HealCounts> {
     data.scanComplete,
     "scanInProgress:",
     data.scanInProgress,
-    "withPre:",
-    withPre,
-    "withPost:",
-    withPost,
-    "row0:",
-    row0?.symbol,
-    row0?.displayTicker,
   );
 
-  return { unscanned, chartRefreshPending };
+  if (badErrors > 0) {
+    const bad = results
+      .filter((r) => r.error && BAD_ERRORS.has(r.error))
+      .map((r) => `${(r as { symbol?: string }).symbol}:${r.error}`)
+      .slice(0, 15);
+    console.log("  bad:", bad.join(", "));
+  }
+
+  return {
+    unscanned,
+    chartRefreshPending,
+    badErrors,
+    withReg,
+    total,
+    scanComplete: Boolean(data.scanComplete),
+    scanInProgress: Boolean(data.scanInProgress),
+  };
 }
 
 function isDone(counts: HealCounts): boolean {
-  return counts.unscanned === 0 && counts.chartRefreshPending === 0;
+  const regPct = counts.total ? counts.withReg / counts.total : 0;
+  return (
+    counts.unscanned === 0 &&
+    counts.chartRefreshPending === 0 &&
+    counts.badErrors === 0 &&
+    regPct >= 0.98
+  );
 }
 
 async function main() {
@@ -68,7 +94,7 @@ async function main() {
     console.log(`\n=== heal round ${round}/${MAX_ROUNDS} ===`);
     const counts = await fetchHealCounts();
     if (isDone(counts)) {
-      console.log("Done — all symbols scanned with resolved chart data.");
+      console.log("Done — all success criteria pass.");
       return;
     }
     if (round < MAX_ROUNDS) {
@@ -78,7 +104,7 @@ async function main() {
 
   const remaining = await fetchHealCounts();
   console.log(
-    `Stopped after ${MAX_ROUNDS} rounds — unscanned=${remaining.unscanned}, chartPending=${remaining.chartRefreshPending}.`,
+    `Stopped after ${MAX_ROUNDS} rounds — reg=${remaining.withReg}/${remaining.total}, badErrors=${remaining.badErrors}.`,
   );
 }
 

@@ -1,5 +1,6 @@
 import { sanitizeScanResults } from "./chart-error-sanitize";
 import { normalizeCachedResponse } from "./normalize-scan-result";
+import { isExcludedSymbol } from "./stocks";
 import {
   formatStorageError,
   getScanStorage,
@@ -48,12 +49,14 @@ export async function loadSnapshot(): Promise<ScanSnapshot | null> {
 }
 
 async function enrichSnapshot(snapshot: ScanSnapshot): Promise<ScanSnapshot> {
-  let updated = sanitizeSnapshotResults(snapshot);
+  let updated = pruneExcludedSymbols(snapshot);
+  updated = sanitizeSnapshotResults(updated);
   const { backfillSnapshotIndexes } = await import("./snapshot-enrich");
   updated = await backfillSnapshotIndexes(updated);
 
   const changed =
     updated.results !== snapshot.results ||
+    updated.symbolCount !== snapshot.symbolCount ||
     updated.results.some(
       (row, index) =>
         row.error !== snapshot.results[index]?.error ||
@@ -65,6 +68,16 @@ async function enrichSnapshot(snapshot: ScanSnapshot): Promise<ScanSnapshot> {
   }
 
   return updated;
+}
+
+function pruneExcludedSymbols(snapshot: ScanSnapshot): ScanSnapshot {
+  const filtered = snapshot.results.filter((row) => !isExcludedSymbol(row.symbol));
+  if (filtered.length === snapshot.results.length) return snapshot;
+  return {
+    ...snapshot,
+    results: filtered,
+    symbolCount: filtered.length,
+  };
 }
 
 function sanitizeSnapshotResults(snapshot: ScanSnapshot): ScanSnapshot {
