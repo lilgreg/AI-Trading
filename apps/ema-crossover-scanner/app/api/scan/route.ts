@@ -23,8 +23,8 @@ import {
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
-const SYNC_RETRY_FAILED_LIMIT = 10;
-const HEAL_MAX_SYMBOLS = 20;
+const SYNC_RETRY_FAILED_LIMIT = 25;
+const HEAL_MAX_SYMBOLS = 25;
 
 function parseForce(searchParams: URLSearchParams): boolean {
   return searchParams.get("force") === "true";

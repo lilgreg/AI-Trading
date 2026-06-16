@@ -110,6 +110,8 @@ interface ScanLock {
 const LOCK_TTL_MS = 15 * 60 * 1000;
 /** Release lock when cache is still empty after this long (crashed scan). */
 const EMPTY_CACHE_LOCK_GRACE_MS = 2 * 60 * 1000;
+/** Vercel maxDuration is 300s — release orphan locks after scan timeout + buffer. */
+const ORPHAN_SCAN_LOCK_MS = 6 * 60 * 1000;
 
 async function readScanLock(): Promise<ScanLock | null> {
   const storage = getScanStorage();
@@ -129,16 +131,25 @@ export async function recoverStuckScanState(
 ): Promise<void> {
   const now = Date.now();
   const lock = await readScanLock();
-  const persistedActive = isLockActive(lock, now);
+  if (!lock) return;
 
-  if (snapshot == null && persistedActive) {
-    const startedMs = lock?.startedAt
-      ? new Date(lock.startedAt).getTime()
-      : 0;
-    const lockAge = startedMs > 0 ? now - startedMs : LOCK_TTL_MS;
-    if (lockAge >= EMPTY_CACHE_LOCK_GRACE_MS) {
-      await releaseScanLock();
-    }
+  const startedMs = lock.startedAt ? new Date(lock.startedAt).getTime() : 0;
+  const lockAge = startedMs > 0 ? now - startedMs : LOCK_TTL_MS;
+  const expired = !isLockActive(lock, now);
+
+  if (expired) {
+    await releaseScanLock();
+    return;
+  }
+
+  if (snapshot == null && lockAge >= EMPTY_CACHE_LOCK_GRACE_MS) {
+    await releaseScanLock();
+    return;
+  }
+
+  // Serverless scan timed out without releasing lock in finally.
+  if (lockAge >= ORPHAN_SCAN_LOCK_MS) {
+    await releaseScanLock();
   }
 }
 
@@ -248,10 +259,16 @@ export function toCachedResponse(
   snapshot: ScanSnapshot | null,
   status: ScanCacheStatus,
 ): CachedScanResponse {
+  const results = snapshot?.results ?? [];
+  const scanComplete =
+    snapshot != null &&
+    snapshot.scanComplete !== false &&
+    !results.some((row) => row.error === "Not scanned yet");
+
   return normalizeCachedResponse({
     scannedAt: snapshot?.scannedAt ?? new Date(0).toISOString(),
     symbolCount: snapshot?.symbolCount ?? 0,
-    results: snapshot?.results ?? [],
+    results,
     sources: snapshot?.sources ?? {
       blueChips: false,
       watchlist: false,
@@ -259,6 +276,13 @@ export function toCachedResponse(
       tradingViewWatchlist: false,
     },
     tradingViewWatchlistName: snapshot?.tradingViewWatchlistName,
+    scanComplete,
+    retryableCount: results.filter((row) => {
+      if (row.ema20 != null && row.ema50 != null && !row.error) return false;
+      if (row.error === "Not scanned yet") return true;
+      if (!row.error) return row.ema20 == null || row.ema50 == null;
+      return true;
+    }).length,
     ...status,
   });
 }

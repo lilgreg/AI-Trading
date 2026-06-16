@@ -28,7 +28,7 @@ function mergeNullableNumber(
   return null;
 }
 
-function preserveSessionFields(
+export function preserveSessionFields(
   incoming: StockScanResult,
   existing: StockScanResult,
 ): Pick<

@@ -104,5 +104,7 @@ export function normalizeCachedResponse(
     staleAfterMinutes: payload?.staleAfterMinutes ?? 15,
     lastError: payload?.lastError ?? null,
     scanStartedAt: payload?.scanStartedAt ?? null,
+    scanComplete: payload?.scanComplete,
+    retryableCount: payload?.retryableCount,
   };
 }

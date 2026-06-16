@@ -70,15 +70,16 @@ export function isAfterPreMarketStart(at: Date = new Date()): boolean {
   return m >= 4 * 60;
 }
 
-/** Pre-market % persists all day once available (hidden overnight before 4 AM ET). */
+/** Pre-market % from the completed session day — visible until next 4 AM ET pre-market. */
 export function shouldShowPre(
   session: UsMarketSession = getUsMarketSession(),
 ): boolean {
-  if (session === "pre" || session === "regular" || session === "afterHours") {
-    return true;
-  }
-  if (session === "closed") return isAfterPreMarketStart();
-  return false;
+  return (
+    session === "pre" ||
+    session === "regular" ||
+    session === "afterHours" ||
+    session === "closed"
+  );
 }
 
 /** After-hours % visible during AH and overnight closed until next 4 AM ET. */
@@ -97,7 +98,7 @@ export function shouldShowRegular(
 
 /**
  * Session column visibility rules (ET):
- * - Pre: show when we have data and time is after 4 AM — persists all day until next 4 AM
+ * - Pre: show when we have data — persists through closed overnight until next 4 AM ET
  * - Reg: show during regular + AH + closed (completed regular move)
  * - AH: show during AH + closed overnight until next 4 AM
  */

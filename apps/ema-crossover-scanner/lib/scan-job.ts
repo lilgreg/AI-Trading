@@ -8,6 +8,7 @@ import {
 import { CHART_TAIL_SYMBOL_INDEX } from "./chart-data";
 import { rowNeedsChartHeal } from "./chart-error-sanitize";
 import { sleep } from "./request-limit";
+import { mergeScanResultsPreservingQuotes } from "./quote-updates";
 import {
   buildCacheStatus,
   getStaleAfterMs,
@@ -87,6 +88,15 @@ export function isRetryableResult(result: StockScanResult): boolean {
 
 export function countRetryableResults(results: StockScanResult[]): number {
   return results.filter(isRetryableResult).length;
+}
+
+export function hasUnscannedRows(results: StockScanResult[]): boolean {
+  return results.some((row) => row.error === "Not scanned yet");
+}
+
+function rowNeedsHeal(row: StockScanResult): boolean {
+  if (row.error === "Not scanned yet") return true;
+  return rowNeedsChartHeal(row);
 }
 
 function buildOrderedResults(
@@ -267,15 +277,8 @@ async function mergeScanResults(
 
           let next = keepPrior ? prior : result;
 
-          if (!keepPrior && prior && result.error) {
-            next = {
-              ...result,
-              price: result.price ?? prior.price,
-              preMarketChange: result.preMarketChange ?? prior.preMarketChange,
-              regularMarketChange:
-                result.regularMarketChange ?? prior.regularMarketChange,
-              postMarketChange: result.postMarketChange ?? prior.postMarketChange,
-            };
+          if (prior && !keepPrior) {
+            next = mergeScanResultsPreservingQuotes([prior], [result])[0];
           }
 
           resultsBySymbol.set(result.symbol, { ...next, universeIndex: symbolIndexByYahoo.get(result.symbol) });
@@ -453,11 +456,11 @@ function mergeScanResultPreservingQuotes(
   return incoming;
 }
 
-const HEAL_MAX_PER_REQUEST = 20;
+const HEAL_MAX_PER_REQUEST = 25;
 const HEAL_RESCAN_DELAY_MS = 1_500;
 
 /**
- * Synchronously rescan rows with stale chart errors (e.g. legacy Stooq blob strings).
+ * Synchronously rescan rows with stale chart errors or never-scanned placeholders.
  * Persists healed rows to cache before returning.
  */
 export async function healCacheOnRead(
@@ -466,7 +469,7 @@ export async function healCacheOnRead(
   options: { maxSymbols?: number } = {},
 ): Promise<ScanSnapshot> {
   const maxSymbols = options.maxSymbols ?? HEAL_MAX_PER_REQUEST;
-  const toHeal = snapshot.results.filter(rowNeedsChartHeal).slice(0, maxSymbols);
+  const toHeal = snapshot.results.filter(rowNeedsHeal).slice(0, maxSymbols);
   if (toHeal.length === 0) return snapshot;
 
   const config = resolveScanJobConfig(overrides);
@@ -683,7 +686,9 @@ export async function ensureFreshScan(
   const config = resolveScanJobConfig(overrides);
   const configKey = buildConfigKey(config);
   const configMismatch = snapshot != null && snapshot.configKey !== configKey;
-  const incomplete = snapshot != null && snapshot.scanComplete === false;
+  const incomplete =
+    snapshot != null &&
+    (snapshot.scanComplete === false || hasUnscannedRows(snapshot.results));
   const hasRetryable =
     snapshot != null && countRetryableResults(snapshot.results) > 0;
   const stale = isSnapshotStale(snapshot) || configMismatch || incomplete;
@@ -702,12 +707,16 @@ export async function ensureFreshScan(
 export async function getScanStatus() {
   const snapshot = await loadSnapshot();
   const status = await buildCacheStatus(snapshot);
+  const scanComplete =
+    snapshot != null &&
+    snapshot.scanComplete !== false &&
+    !hasUnscannedRows(snapshot.results);
   return {
     ...status,
     scannedAt: snapshot?.scannedAt ?? null,
     completedAt: snapshot?.completedAt ?? null,
     symbolCount: snapshot?.symbolCount ?? 0,
-    scanComplete: snapshot?.scanComplete !== false,
+    scanComplete,
     retryableCount: snapshot ? countRetryableResults(snapshot.results) : 0,
     staleAfterMs: getStaleAfterMs(),
   };

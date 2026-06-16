@@ -729,7 +729,7 @@ export default function HomePage() {
   }, [data?.results]);
 
   useEffect(() => {
-    void fetchCache();
+    void fetchCache({ heal: true });
   }, [fetchCache]);
 
   useEffect(() => {
@@ -803,8 +803,17 @@ export default function HomePage() {
     [data?.results],
   );
 
+  const unscannedCount = useMemo(
+    () =>
+      data?.results?.filter((r) => r.error === "Not scanned yet").length ?? 0,
+    [data?.results],
+  );
+
   const shouldRetryFailed =
-    (errorCount > RETRY_FAILED_THRESHOLD || tailErrorCount > 0) && tailErrorCount === 0;
+    (errorCount > RETRY_FAILED_THRESHOLD ||
+      tailErrorCount > 0 ||
+      unscannedCount > 0) &&
+    tailErrorCount === 0;
 
   const shouldRetryTail =
     tailErrorCount > 0 &&

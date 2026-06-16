@@ -17,6 +17,10 @@
     {
       "path": "/api/cron/scan-chunk?offset=160&limit=100",
       "schedule": "10 0 * * *"
+    },
+    {
+      "path": "/api/cron/scan-chunk?offset=260&limit=100",
+      "schedule": "15 0 * * *"
     }
   ],
   "functions": {

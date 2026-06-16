@@ -115,7 +115,10 @@ export interface ScanCacheStatus {
   scanStartedAt: string | null;
 }
 
-export interface CachedScanResponse extends ScanResponse, ScanCacheStatus {}
+export interface CachedScanResponse extends ScanResponse, ScanCacheStatus {
+  scanComplete?: boolean;
+  retryableCount?: number;
+}
 
 export interface ScanSnapshot extends ScanResponse {
   /** ISO timestamp when scan finished writing to cache */

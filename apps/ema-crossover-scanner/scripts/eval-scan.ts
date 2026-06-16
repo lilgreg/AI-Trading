@@ -87,6 +87,12 @@ function runSessionSanityChecks(): void {
   );
   console.log(`pre during regular: ${preReg.preMarketChange}`);
 
+  const preClosedOvernight = filterSessionChangesForMarket(
+    { preMarketChange: 1.2, regularMarketChange: 0.5, postMarketChange: -0.3 },
+    "closed",
+  );
+  console.log(`pre during closed overnight: ${preClosedOvernight.preMarketChange}`);
+
   const ahClosed = filterSessionChangesForMarket(
     { preMarketChange: 1.2, regularMarketChange: 0.5, postMarketChange: -0.3 },
     "closed",
