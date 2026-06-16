@@ -53,7 +53,10 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const symbols = rows.map((row) => row.symbol);
+  const symbols = rows
+    .slice()
+    .sort((a, b) => (a.universeIndex ?? 0) - (b.universeIndex ?? 0))
+    .map((row) => row.symbol);
   const quotes = await fetchQuoteUpdates(symbols, { offset, limit });
 
   return NextResponse.json(

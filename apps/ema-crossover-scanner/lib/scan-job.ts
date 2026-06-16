@@ -6,6 +6,7 @@ import {
   sortByRecentCrossover,
 } from "./scanner";
 import { CHART_TAIL_SYMBOL_INDEX } from "./chart-data";
+import { rowNeedsChartHeal } from "./chart-error-sanitize";
 import { sleep } from "./request-limit";
 import {
   buildCacheStatus,
@@ -449,6 +450,77 @@ function mergeScanResultPreservingQuotes(
   }
 
   return incoming;
+}
+
+const HEAL_MAX_PER_REQUEST = 20;
+const HEAL_RESCAN_DELAY_MS = 1_500;
+
+/**
+ * Synchronously rescan rows with stale chart errors (e.g. legacy Stooq blob strings).
+ * Persists healed rows to blob before returning.
+ */
+export async function healCacheOnRead(
+  snapshot: ScanSnapshot,
+  overrides: Partial<ScanJobConfig> = {},
+  options: { maxSymbols?: number } = {},
+): Promise<ScanSnapshot> {
+  const maxSymbols = options.maxSymbols ?? HEAL_MAX_PER_REQUEST;
+  const toHeal = snapshot.results.filter(rowNeedsChartHeal).slice(0, maxSymbols);
+  if (toHeal.length === 0) return snapshot;
+
+  const config = resolveScanJobConfig(overrides);
+  const configKey = buildConfigKey(config);
+  if (snapshot.configKey !== configKey) return snapshot;
+
+  const { symbols, sources, tradingViewWatchlistName } =
+    await buildSymbolUniverse({
+      includeBlueChips: config.includeBlueChips,
+      watchlistText: config.watchlistText,
+      customSymbols: config.customSymbols,
+      tradingViewWatchlistUrl: config.tradingViewWatchlistUrl,
+    });
+
+  const symbolIndexByYahoo = new Map(
+    symbols.map((parsed, index) => [parsed.yahoo, index]),
+  );
+
+  const resultsBySymbol = new Map(
+    snapshot.results.map((row) => [row.symbol, row]),
+  );
+
+  for (let i = 0; i < toHeal.length; i += 1) {
+    if (i > 0) await sleep(HEAL_RESCAN_DELAY_MS);
+
+    const row = toHeal[i];
+    const index = row.universeIndex ?? symbolIndexByYahoo.get(row.symbol);
+    if (index == null) continue;
+
+    const parsed = symbols[index];
+    if (!parsed) continue;
+
+    const prior = resultsBySymbol.get(parsed.yahoo);
+    const scanned = await scanSymbol(parsed, config.historyDays, false, index);
+    const next = mergeScanResultPreservingQuotes(scanned, prior);
+    resultsBySymbol.set(parsed.yahoo, { ...next, universeIndex: index });
+  }
+
+  const fallbackBySymbol = new Map(
+    snapshot.results.map((row) => [row.symbol, row]),
+  );
+  const updated = buildSnapshot(
+    symbols,
+    resultsBySymbol,
+    fallbackBySymbol,
+    configKey,
+    sources,
+    tradingViewWatchlistName,
+    snapshot.scanComplete !== false,
+    snapshot.completedAt ?? null,
+  );
+
+  await saveSnapshot(updated);
+  setScanError(null);
+  return updated;
 }
 
 /** Retry chart fetch for tail symbols (index >= 122) with staggered Yahoo providers. */

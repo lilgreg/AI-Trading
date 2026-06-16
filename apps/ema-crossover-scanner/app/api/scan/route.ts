@@ -13,6 +13,7 @@ import {
 import {
   countRetryableResults,
   ensureFreshScan,
+  healCacheOnRead,
   retryFailedSymbols,
   runBackgroundScan,
   scanAndMergeSymbol,
@@ -22,9 +23,15 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
 const SYNC_RETRY_FAILED_LIMIT = 10;
+const HEAL_MAX_SYMBOLS = 20;
 
 function parseForce(searchParams: URLSearchParams): boolean {
   return searchParams.get("force") === "true";
+}
+
+function parseHeal(searchParams: URLSearchParams): boolean {
+  const heal = searchParams.get("heal");
+  return heal === "1" || heal === "true";
 }
 
 function parseStatusOnly(searchParams: URLSearchParams): boolean {
@@ -59,6 +66,7 @@ export async function GET(request: NextRequest) {
   const { searchParams } = request.nextUrl;
   const force = parseForce(searchParams);
   const statusOnly = parseStatusOnly(searchParams);
+  const heal = parseHeal(searchParams);
 
   let snapshot = await loadSnapshot();
   let status = await buildCacheStatus(snapshot);
@@ -101,7 +109,20 @@ export async function GET(request: NextRequest) {
   }
 
   snapshot = await ensureLogoBackfill(snapshot);
-  queueStaleChartRescans(snapshot);
+
+  if (heal && snapshot?.results?.length && !status.scanInProgress) {
+    try {
+      const healed = await healCacheOnRead(snapshot, {}, {
+        maxSymbols: HEAL_MAX_SYMBOLS,
+      });
+      if (healed) snapshot = healed;
+    } catch {
+      // return best-effort snapshot if inline heal fails
+    }
+  } else {
+    queueStaleChartRescans(snapshot);
+  }
+
   status = await buildCacheStatus(snapshot);
 
   return NextResponse.json(toCachedResponse(snapshot, status), {

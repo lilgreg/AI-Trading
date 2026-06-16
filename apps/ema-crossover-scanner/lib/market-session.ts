@@ -70,6 +70,17 @@ export function isAfterPreMarketStart(at: Date = new Date()): boolean {
   return m >= 4 * 60;
 }
 
+/** Pre-market % persists all day once available (hidden overnight before 4 AM ET). */
+export function shouldShowPre(
+  session: UsMarketSession = getUsMarketSession(),
+): boolean {
+  if (session === "pre" || session === "regular" || session === "afterHours") {
+    return true;
+  }
+  if (session === "closed") return isAfterPreMarketStart();
+  return false;
+}
+
 /** After-hours % visible during AH and overnight closed until next 4 AM ET. */
 export function shouldShowAfterHours(
   session: UsMarketSession = getUsMarketSession(),
@@ -95,7 +106,7 @@ export function filterSessionChangesForMarket(
   session: UsMarketSession = getUsMarketSession(),
 ): SessionChanges {
   const pre =
-    isAfterPreMarketStart() && hasSessionValue(changes.preMarketChange)
+    shouldShowPre(session) && hasSessionValue(changes.preMarketChange)
       ? changes.preMarketChange
       : null;
 

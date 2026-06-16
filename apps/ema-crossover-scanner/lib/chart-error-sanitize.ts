@@ -5,18 +5,36 @@ export function isStooqChartError(error: string | undefined | null): boolean {
   return error?.toLowerCase().includes("stooq") ?? false;
 }
 
-export function isStaleChartError(error: string | undefined | null): boolean {
-  if (!error) return false;
-  return isStooqChartError(error);
+export function isAllProvidersFailedError(
+  error: string | undefined | null,
+): boolean {
+  return error?.toLowerCase().includes("all chart providers failed") ?? false;
 }
 
-/** Replace stale provider errors so UI triggers refresh instead of showing Stooq text. */
+export function isStaleChartError(error: string | undefined | null): boolean {
+  if (!error) return false;
+  if (isStooqChartError(error)) return true;
+  if (isAllProvidersFailedError(error)) return true;
+  if (error === "Chart data refresh pending") return true;
+  return false;
+}
+
+/** Replace stale provider errors so UI never shows removed provider names. */
 export function sanitizeChartError(
   error: string | undefined,
 ): string | undefined {
   if (!error) return error;
+  if (isStaleChartError(error)) return "Chart data refresh pending";
   if (isStooqChartError(error)) return "Chart data refresh pending";
   return error;
+}
+
+/** True when cached row needs a synchronous chart rescan (legacy blob errors). */
+export function rowNeedsChartHeal(row: StockScanResult): boolean {
+  if (row.ema20 != null) return false;
+  if (!row.error) return false;
+  if (isStaleChartError(row.error)) return true;
+  return false;
 }
 
 export function sanitizeScanResult(row: StockScanResult): StockScanResult {

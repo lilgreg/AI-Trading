@@ -12,7 +12,7 @@ import {
   normalizePatterns,
 } from "@/lib/normalize-scan-result";
 import { patternSortKey } from "@/lib/pattern-sort";
-import { isStooqChartError } from "@/lib/chart-error-sanitize";
+import { isStooqChartError, sanitizeChartError } from "@/lib/chart-error-sanitize";
 import { applyQuoteUpdates, mergeScanResultIntoRows, mergeScanResultsPreservingQuotes } from "@/lib/quote-updates";
 import { StockLogo } from "@/components/stock-logo";
 import { NewsArticleModal } from "@/components/news-article-modal";
@@ -218,7 +218,7 @@ function crossoverCellError(
   rowError?: string,
 ): string | undefined {
   if (hasCrossover(cross)) return undefined;
-  return rowError;
+  return sanitizeChartError(rowError);
 }
 
 function hasCrossover(cross: CrossoverDisplay | undefined): boolean {
@@ -405,12 +405,16 @@ export default function HomePage() {
     [],
   );
 
-  const fetchCache = useCallback(async (options?: { quiet?: boolean }) => {
+  const fetchCache = useCallback(async (options?: { quiet?: boolean; heal?: boolean }) => {
     if (!options?.quiet) setLoading(true);
     setError(null);
 
     try {
-      const res = await fetch("/api/scan", { cache: "no-store" });
+      const healQuery =
+        options?.heal === true || (!options?.quiet && options?.heal !== false)
+          ? "?heal=1"
+          : "";
+      const res = await fetch(`/api/scan${healQuery}`, { cache: "no-store" });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         throw new Error(body.error ?? `Scan failed (${res.status})`);
