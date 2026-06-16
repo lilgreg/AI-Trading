@@ -458,7 +458,7 @@ const HEAL_RESCAN_DELAY_MS = 1_500;
 
 /**
  * Synchronously rescan rows with stale chart errors (e.g. legacy Stooq blob strings).
- * Persists healed rows to blob before returning.
+ * Persists healed rows to cache before returning.
  */
 export async function healCacheOnRead(
   snapshot: ScanSnapshot,

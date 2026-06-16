@@ -117,6 +117,17 @@ export interface ScanCacheStatus {
 
 export interface CachedScanResponse extends ScanResponse, ScanCacheStatus {}
 
+export interface ScanSnapshot extends ScanResponse {
+  /** ISO timestamp when scan finished writing to cache */
+  completedAt: string;
+  /** Hash of scan config — invalidates cache when env changes */
+  configKey: string;
+  /** False while a multi-invocation scan is still in progress */
+  scanComplete?: boolean;
+  /** ISO timestamp of the most recent partial or final write */
+  lastSavedAt?: string;
+}
+
 export interface ParsedSymbol {
   raw: string;
   yahoo: string;

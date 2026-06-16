@@ -1,30 +1,17 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import path from "node:path";
 import { sanitizeScanResults } from "./chart-error-sanitize";
 import { normalizeCachedResponse } from "./normalize-scan-result";
-import type { CachedScanResponse, ScanCacheStatus, ScanResponse } from "./types";
+import {
+  formatStorageError,
+  getScanStorage,
+  LOCK_KEY,
+} from "./scan-storage";
+import type {
+  CachedScanResponse,
+  ScanCacheStatus,
+  ScanSnapshot,
+} from "./types";
 
-export interface ScanSnapshot extends ScanResponse {
-  /** ISO timestamp when scan finished writing to cache */
-  completedAt: string;
-  /** Hash of scan config — invalidates cache when env changes */
-  configKey: string;
-  /** False while a multi-invocation scan is still in progress */
-  scanComplete?: boolean;
-  /** ISO timestamp of the most recent partial or final write */
-  lastSavedAt?: string;
-}
-
-export type { ScanCacheStatus, CachedScanResponse } from "./types";
-
-const BLOB_PATHNAME =
-  process.env.SCAN_CACHE_BLOB_PATH ?? "ema-scanner/snapshot.json";
-const LOCK_BLOB_PATHNAME =
-  process.env.SCAN_LOCK_BLOB_PATH ?? "ema-scanner/scan-lock.json";
-const LOCAL_CACHE_DIR =
-  process.env.SCAN_CACHE_DIR ?? path.join(process.cwd(), ".cache");
-const LOCAL_SNAPSHOT_PATH = path.join(LOCAL_CACHE_DIR, "scan-snapshot.json");
-const LOCAL_LOCK_PATH = path.join(LOCAL_CACHE_DIR, "scan-lock.json");
+export type { ScanSnapshot, ScanCacheStatus, CachedScanResponse } from "./types";
 
 /** In-process snapshot for warm lambda reads */
 let memorySnapshot: ScanSnapshot | null = null;
@@ -43,75 +30,17 @@ export function isSnapshotStale(snapshot: ScanSnapshot | null): boolean {
   return age > getStaleAfterMs();
 }
 
-function hasBlobToken(): boolean {
-  return Boolean(process.env.BLOB_READ_WRITE_TOKEN);
-}
-
-async function readBlobJson<T>(pathname: string): Promise<T | null> {
-  if (!hasBlobToken()) return null;
-  try {
-    const { head } = await import("@vercel/blob");
-    const meta = await head(pathname);
-    const res = await fetch(meta.url, { cache: "no-store" });
-    if (!res.ok) return null;
-    return (await res.json()) as T;
-  } catch {
-    return null;
-  }
-}
-
-function formatBlobError(message: string): string {
-  const lower = message.toLowerCase();
-  if (lower.includes("suspended")) {
-    return "Blob storage suspended — scanning without persistent cache";
-  }
-  if (
-    lower.includes("quota") ||
-    lower.includes("limit") ||
-    lower.includes("storage") ||
-    lower.includes("exceeded")
-  ) {
-    return "Blob storage full — scanning without persistent cache";
-  }
-  return message;
-}
-
-async function writeBlobJson(pathname: string, data: unknown): Promise<void> {
-  if (!hasBlobToken()) return;
-  const { put } = await import("@vercel/blob");
-  await put(pathname, JSON.stringify(data), {
-    access: "public",
-    addRandomSuffix: false,
-    contentType: "application/json",
-  });
-}
-
-async function readLocalJson<T>(filePath: string): Promise<T | null> {
-  try {
-    const raw = await readFile(filePath, "utf8");
-    return JSON.parse(raw) as T;
-  } catch {
-    return null;
-  }
-}
-
-async function writeLocalJson(filePath: string, data: unknown): Promise<void> {
-  await mkdir(path.dirname(filePath), { recursive: true });
-  await writeFile(filePath, JSON.stringify(data), "utf8");
+function hasPersistentStorage(): boolean {
+  return getScanStorage().isPersistent();
 }
 
 export async function loadSnapshot(): Promise<ScanSnapshot | null> {
   if (memorySnapshot) return memorySnapshot;
 
-  const fromBlob = await readBlobJson<ScanSnapshot>(BLOB_PATHNAME);
-  if (fromBlob?.results) {
-    memorySnapshot = await enrichSnapshot(fromBlob);
-    return memorySnapshot;
-  }
-
-  const fromDisk = await readLocalJson<ScanSnapshot>(LOCAL_SNAPSHOT_PATH);
-  if (fromDisk?.results) {
-    memorySnapshot = await enrichSnapshot(fromDisk);
+  const storage = getScanStorage();
+  const fromStorage = await storage.getSnapshot();
+  if (fromStorage?.results) {
+    memorySnapshot = await enrichSnapshot(fromStorage);
     return memorySnapshot;
   }
 
@@ -151,19 +80,26 @@ export async function saveSnapshot(snapshot: ScanSnapshot): Promise<void> {
   memorySnapshot = snapshot;
   lastError = null;
 
-  if (hasBlobToken()) {
+  const storage = getScanStorage();
+
+  if (storage.isPersistent()) {
     try {
-      await writeBlobJson(BLOB_PATHNAME, snapshot);
+      await storage.saveSnapshot(snapshot);
     } catch (err) {
       const message =
-        err instanceof Error ? err.message : "Blob snapshot write failed";
-      setScanError(formatBlobError(message));
+        err instanceof Error ? err.message : "Snapshot write failed";
+      setScanError(formatStorageError(message));
     }
-    await writeLocalJson(LOCAL_SNAPSHOT_PATH, snapshot).catch(() => undefined);
     return;
   }
 
-  await writeLocalJson(LOCAL_SNAPSHOT_PATH, snapshot);
+  try {
+    await storage.saveSnapshot(snapshot);
+  } catch (err) {
+    const message =
+      err instanceof Error ? err.message : "Local snapshot write failed";
+    setScanError(message);
+  }
 }
 
 interface ScanLock {
@@ -176,10 +112,8 @@ const LOCK_TTL_MS = 15 * 60 * 1000;
 const EMPTY_CACHE_LOCK_GRACE_MS = 2 * 60 * 1000;
 
 async function readScanLock(): Promise<ScanLock | null> {
-  return (
-    (await readBlobJson<ScanLock>(LOCK_BLOB_PATHNAME)) ??
-    (await readLocalJson<ScanLock>(LOCAL_LOCK_PATH))
-  );
+  const storage = getScanStorage();
+  return storage.readJson<ScanLock>(LOCK_KEY);
 }
 
 function isLockActive(lock: ScanLock | null, now = Date.now()): boolean {
@@ -187,8 +121,8 @@ function isLockActive(lock: ScanLock | null, now = Date.now()): boolean {
 }
 
 /**
- * Clear orphan memory locks and blob locks held with no cached snapshot
- * (e.g. blob write failed during lock acquire or scan timed out on Vercel).
+ * Clear orphan memory locks and remote locks held with no cached snapshot
+ * (e.g. storage write failed during lock acquire or scan timed out on Vercel).
  */
 export async function recoverStuckScanState(
   snapshot: ScanSnapshot | null,
@@ -229,20 +163,19 @@ export async function tryAcquireScanLock(): Promise<boolean> {
     return false;
   }
 
+  const storage = getScanStorage();
+
   try {
-    await Promise.all([
-      writeBlobJson(LOCK_BLOB_PATHNAME, lock),
-      writeLocalJson(LOCAL_LOCK_PATH, lock).catch(() => undefined),
-    ]);
+    await storage.writeJson(LOCK_KEY, lock);
   } catch (err) {
     const message =
       err instanceof Error ? err.message : "Failed to acquire scan lock";
-    setScanError(formatBlobError(message));
-    if (!hasBlobToken()) {
+    setScanError(formatStorageError(message));
+    if (!hasPersistentStorage()) {
       memoryLockUntil = 0;
       return false;
     }
-    // Blob unavailable (quota/suspended) — in-memory lock only so scan can still run.
+    // R2 unavailable — in-memory lock only so scan can still run.
   }
 
   memoryLockUntil = now + LOCK_TTL_MS;
@@ -255,10 +188,9 @@ export async function releaseScanLock(): Promise<void> {
     startedAt: new Date(0).toISOString(),
     expiresAt: new Date(0).toISOString(),
   };
-  await Promise.all([
-    writeBlobJson(LOCK_BLOB_PATHNAME, expired).catch(() => undefined),
-    writeLocalJson(LOCAL_LOCK_PATH, expired).catch(() => undefined),
-  ]);
+  await getScanStorage()
+    .writeJson(LOCK_KEY, expired)
+    .catch(() => undefined);
 }
 
 export async function isScanInProgress(): Promise<boolean> {
@@ -267,8 +199,8 @@ export async function isScanInProgress(): Promise<boolean> {
   const persistedActive = isLockActive(lock, now);
 
   if (memoryLockUntil > now) {
-    if (!persistedActive && hasBlobToken()) {
-      // In-memory scan while blob lock/cache unavailable.
+    if (!persistedActive && hasPersistentStorage()) {
+      // In-memory scan while remote lock/cache unavailable.
       return true;
     }
     if (!persistedActive) {
