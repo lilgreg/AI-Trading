@@ -77,8 +77,11 @@ export async function GET(request: NextRequest) {
   await recoverStuckScanState(snapshot);
   let status = await buildCacheStatus(snapshot);
 
+  const hasUnscanned =
+    snapshot?.results?.length ? hasUnscannedRows(snapshot.results) : false;
+
   if (statusOnly) {
-    if (status.stale && !status.scanInProgress) {
+    if (status.stale && !status.scanInProgress && !hasUnscanned) {
       void ensureFreshScan({});
       status = await buildCacheStatus(snapshot);
     }
@@ -93,14 +96,18 @@ export async function GET(request: NextRequest) {
 
   if (force) {
     void ensureFreshScan({}, { force: true });
-  } else if (status.cacheEmpty || status.stale) {
+  } else if (status.cacheEmpty) {
+    void ensureFreshScan({});
+  } else if (status.stale && !hasUnscanned) {
     void ensureFreshScan({});
   }
 
   if (
+    !heal &&
     !status.scanInProgress &&
     snapshot?.results?.length &&
-    countRetryableResults(snapshot.results) > 0
+    countRetryableResults(snapshot.results) > 0 &&
+    !hasUnscanned
   ) {
     try {
       const retried = await retryFailedSymbols({}, {
@@ -117,12 +124,10 @@ export async function GET(request: NextRequest) {
   snapshot = await ensureLogoBackfill(snapshot);
 
   const shouldHeal =
-    heal &&
-    snapshot?.results?.length &&
-    !status.scanInProgress &&
-    hasUnscannedRows(snapshot.results);
+    heal && snapshot?.results?.length && hasUnscanned;
 
   if (shouldHeal) {
+    await recoverStuckScanState(snapshot);
     try {
       for (let round = 0; round < HEAL_MAX_ROUNDS; round += 1) {
         if (!snapshot?.results?.length || !hasUnscannedRows(snapshot.results)) {
@@ -140,7 +145,7 @@ export async function GET(request: NextRequest) {
     queueStaleChartRescans(snapshot);
   }
 
-  if (snapshot?.results?.length && !status.scanInProgress) {
+  if (snapshot?.results?.length) {
     try {
       const { results, changed } = await enrichSnapshotSessions(
         snapshot.results,
