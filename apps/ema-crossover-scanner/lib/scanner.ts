@@ -10,6 +10,8 @@ import { sleep } from "./request-limit";
 import { resolveLogoUrl } from "./symbol-logo";
 import {
   resolveTradingViewSymbol,
+  resolveYahooChartSymbol,
+  stripDisplayTicker,
   tradingViewChartUrl,
 } from "./stocks";
 import type { CrossoverDisplay, ParsedSymbol, StockScanResult } from "./types";
@@ -76,9 +78,8 @@ export async function scanSymbol(
   symbolIndex?: number,
 ): Promise<StockScanResult> {
   const tvSymbol = resolveTradingViewSymbol(parsed);
-  const displayTicker = tvSymbol.includes(":")
-    ? tvSymbol.split(":", 2)[1]
-    : tvSymbol;
+  const displayTicker = stripDisplayTicker(tvSymbol);
+  const chartSymbol = resolveYahooChartSymbol(parsed.yahoo);
 
   const base: StockScanResult = {
     symbol: parsed.yahoo,
@@ -104,7 +105,7 @@ export async function scanSymbol(
   };
 
   try {
-    const meta = await fetchQuoteMeta(parsed.yahoo);
+    const meta = await fetchQuoteMeta(chartSymbol);
     const sessionResolved = await resolveSessionChanges(
       {
         symbol: parsed.yahoo,
@@ -129,9 +130,7 @@ export async function scanSymbol(
     };
 
     const resolvedTvEarly = resolveTradingViewSymbol(parsed, quoteFields.quoteExchange);
-    base.displayTicker = resolvedTvEarly.includes(":")
-      ? resolvedTvEarly.split(":", 2)[1]
-      : resolvedTvEarly;
+    base.displayTicker = stripDisplayTicker(resolvedTvEarly);
     base.displaySymbol = resolvedTvEarly;
     base.tradingViewSymbol = resolvedTvEarly;
     base.tradingViewUrl = tradingViewChartUrl(resolvedTvEarly, "4h");
@@ -139,7 +138,7 @@ export async function scanSymbol(
     let hourly: Awaited<ReturnType<typeof fetchHourlyBars>>["bars"];
     let dataSource: string | null = null;
     try {
-      const chartResult = await fetchHourlyBars(parsed.yahoo, historyDays, {
+      const chartResult = await fetchHourlyBars(chartSymbol, historyDays, {
         symbolIndex,
       });
       hourly = chartResult.bars;
@@ -193,6 +192,7 @@ export async function scanSymbol(
       cross1h,
       cross4h,
       patterns,
+      error: undefined,
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to fetch data";

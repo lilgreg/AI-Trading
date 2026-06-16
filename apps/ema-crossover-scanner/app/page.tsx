@@ -13,6 +13,7 @@ import {
 } from "@/lib/normalize-scan-result";
 import { patternSortKey } from "@/lib/pattern-sort";
 import { isStooqChartError, sanitizeChartError } from "@/lib/chart-error-sanitize";
+import { stripDisplayTicker } from "@/lib/stocks";
 import { applyQuoteUpdates, mergeScanResultIntoRows, mergeScanResultsPreservingQuotes } from "@/lib/quote-updates";
 import { StockLogo } from "@/components/stock-logo";
 import { NewsArticleModal } from "@/components/news-article-modal";
@@ -1260,7 +1261,9 @@ export default function HomePage() {
                   const cross4h = row.cross4h ?? undefined;
                   const cross1h = row.cross1h ?? undefined;
                   const chartUrl = row.tradingViewUrl ?? "#";
-                  const ticker = row.displayTicker ?? row.symbol ?? "—";
+                  const ticker = stripDisplayTicker(
+                    row.displayTicker ?? row.symbol ?? "—",
+                  );
 
                   return (
                     <tr key={row.symbol}>

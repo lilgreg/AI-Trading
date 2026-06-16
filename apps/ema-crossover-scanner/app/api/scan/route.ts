@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { backfillMissingLogoUrls } from "@/lib/logo-backfill";
 import {
+  rowNeedsChartHeal,
   symbolsWithStaleChartErrors,
 } from "@/lib/chart-error-sanitize";
 import {
@@ -26,8 +27,8 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
 const SYNC_RETRY_FAILED_LIMIT = 25;
-const HEAL_MAX_SYMBOLS = 8;
-const HEAL_MAX_ROUNDS = 1;
+const HEAL_MAX_SYMBOLS = 25;
+const HEAL_MAX_ROUNDS = 3;
 const SESSION_ENRICH_MAX = 8;
 
 function parseForce(searchParams: URLSearchParams): boolean {
@@ -79,6 +80,11 @@ export async function GET(request: NextRequest) {
 
   const hasUnscanned =
     snapshot?.results?.length ? hasUnscannedRows(snapshot.results) : false;
+  const hasStaleChartRows =
+    snapshot?.results?.length
+      ? snapshot.results.some(rowNeedsChartHeal)
+      : false;
+  const needsHeal = hasUnscanned || hasStaleChartRows;
 
   if (statusOnly) {
     if (status.stale && !status.scanInProgress && !hasUnscanned) {
@@ -124,15 +130,17 @@ export async function GET(request: NextRequest) {
   snapshot = await ensureLogoBackfill(snapshot);
 
   const shouldHeal =
-    heal && snapshot?.results?.length && hasUnscanned;
+    heal && snapshot?.results?.length && needsHeal;
 
   if (shouldHeal) {
     await recoverStuckScanState(snapshot);
     try {
       for (let round = 0; round < HEAL_MAX_ROUNDS; round += 1) {
-        if (!snapshot?.results?.length || !hasUnscannedRows(snapshot.results)) {
-          break;
-        }
+        if (!snapshot?.results?.length) break;
+        const stillNeedsHeal =
+          hasUnscannedRows(snapshot.results) ||
+          snapshot.results.some(rowNeedsChartHeal);
+        if (!stillNeedsHeal) break;
         const healed = await healCacheOnRead(snapshot, {}, {
           maxSymbols: HEAL_MAX_SYMBOLS,
         });
@@ -165,9 +173,12 @@ export async function GET(request: NextRequest) {
   const unscannedCount = snapshot?.results?.filter(
     (row) => row.error === "Not scanned yet",
   ).length ?? 0;
+  const chartRefreshPendingCount = snapshot?.results?.filter(
+    (row) => row.error === "Chart data refresh pending",
+  ).length ?? 0;
 
   return NextResponse.json(
-    { ...toCachedResponse(snapshot, status), unscannedCount },
+    { ...toCachedResponse(snapshot, status), unscannedCount, chartRefreshPendingCount },
     {
       headers: { "Cache-Control": "no-store" },
     },

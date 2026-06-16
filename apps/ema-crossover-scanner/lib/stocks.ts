@@ -362,6 +362,34 @@ const TICKER_EXCHANGE: Record<string, string> = {
   "BRK-B": "NYSE",
 };
 
+/** Yahoo Finance tickers for indices / volatility products (TV ticker → Yahoo). */
+const YAHOO_CHART_SYMBOL_OVERRIDES: Record<string, string> = {
+  VIX: "^VIX",
+  VVIX: "^VVIX",
+  DJIA: "^DJI",
+  DJI: "^DJI",
+  SPX: "^GSPC",
+  GSPC: "^GSPC",
+  NDX: "^NDX",
+  RUT: "^RUT",
+  IXIC: "^IXIC",
+  COMP: "^IXIC",
+};
+
+/** Strip exchange prefix and uppercase for UI display (CBOE:VIX → VIX). */
+export function stripDisplayTicker(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) return trimmed;
+  const ticker = trimmed.includes(":") ? trimmed.split(":").pop()! : trimmed;
+  return ticker.toUpperCase();
+}
+
+/** Map display/Yahoo tickers to Yahoo chart/quote symbols (VIX → ^VIX). */
+export function resolveYahooChartSymbol(symbol: string): string {
+  const base = stripDisplayTicker(symbol);
+  return YAHOO_CHART_SYMBOL_OVERRIDES[base] ?? base;
+}
+
 const YAHOO_TO_TV_EXCHANGE: Record<string, string> = {
   NMS: "NASDAQ",
   NGM: "NASDAQ",
@@ -407,7 +435,9 @@ export function parseSymbol(input: string): ParsedSymbol | null {
   }
 
   const yahoo = ticker.replace(/\./g, "-").toUpperCase();
-  const display = exchange ? `${exchange}:${ticker.toUpperCase()}` : yahoo;
+  const display = exchange
+    ? `${exchange}:${stripDisplayTicker(ticker)}`
+    : yahoo;
 
   if (!/^[A-Z0-9.-]+$/.test(yahoo)) return null;
 

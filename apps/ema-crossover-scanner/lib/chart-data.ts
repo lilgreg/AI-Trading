@@ -14,6 +14,7 @@ import {
   isTwelveDataConfigured,
 } from "./twelve-data";
 import { sleep, yahooLimiter } from "./request-limit";
+import { resolveYahooChartSymbol } from "./stocks";
 import {
   fetchYahooChartV8Direct,
   fetchYahooChartV8Range,
@@ -152,7 +153,8 @@ export async function fetchHourlyBars(
   days: number,
   options: FetchHourlyBarsOptions = {},
 ): Promise<HourlyBarsResult> {
-  const cached = getCachedHourlyBars(symbol, days);
+  const chartSymbol = resolveYahooChartSymbol(symbol);
+  const cached = getCachedHourlyBars(chartSymbol, days);
   if (cached) return cached;
 
   await applyTailStagger(options);
@@ -165,12 +167,12 @@ export async function fetchHourlyBars(
 
     tried.push(provider.name);
     try {
-      const bars = await provider.fetch(symbol, days);
+      const bars = await provider.fetch(chartSymbol, days);
       if (bars.length === 0) {
         errors.push(`${provider.name}: returned no bars`);
         continue;
       }
-      setCachedHourlyBars(symbol, days, bars, provider.name);
+      setCachedHourlyBars(chartSymbol, days, bars, provider.name);
       return { bars, source: provider.name };
     } catch (err) {
       errors.push(
@@ -184,8 +186,8 @@ export async function fetchHourlyBars(
   const providerList = tried.length > 0 ? tried.join(", ") : "none";
   throw new Error(
     errors.length > 0
-      ? `All chart providers failed for ${symbol} (${providerList}): ${errors.join("; ")}`
-      : `All chart providers failed for ${symbol} (${providerList})`,
+      ? `All chart providers failed for ${chartSymbol} (${providerList}): ${errors.join("; ")}`
+      : `All chart providers failed for ${chartSymbol} (${providerList})`,
   );
 }
 

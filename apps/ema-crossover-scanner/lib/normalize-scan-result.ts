@@ -1,4 +1,5 @@
 import { sanitizeChartError } from "./chart-error-sanitize";
+import { stripDisplayTicker } from "./stocks";
 import type {
   CachedScanResponse,
   CrossoverDisplay,
@@ -56,7 +57,9 @@ export function normalizeScanResult(row: LegacyScanRow): StockScanResult {
 
   return {
     symbol: row.symbol ?? "UNKNOWN",
-    displayTicker: row.displayTicker ?? row.symbol ?? "—",
+    displayTicker: stripDisplayTicker(
+      row.displayTicker ?? row.symbol ?? "—",
+    ),
     displaySymbol: row.displaySymbol ?? row.symbol ?? "—",
     tradingViewSymbol: row.tradingViewSymbol ?? row.displaySymbol ?? row.symbol ?? "—",
     name: row.name ?? null,

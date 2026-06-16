@@ -21,6 +21,7 @@ import {
   tryAcquireScanLock,
   type ScanSnapshot,
 } from "./scan-cache";
+import { stripDisplayTicker, resolveTradingViewSymbol } from "./stocks";
 import { buildSymbolUniverse } from "./symbols";
 import type { ParsedSymbol, StockScanResult } from "./types";
 import { EMPTY_CROSSOVER, NONE_PATTERNS } from "./types";
@@ -110,9 +111,11 @@ function buildOrderedResults(
       fallbackBySymbol.get(parsed.yahoo) ??
       {
         symbol: parsed.yahoo,
-        displayTicker: parsed.display,
+        displayTicker: stripDisplayTicker(parsed.display),
         displaySymbol: parsed.display,
-        tradingViewSymbol: parsed.display,
+        tradingViewSymbol: parsed.display.includes(":")
+          ? parsed.display
+          : resolveTradingViewSymbol(parsed),
         name: null,
         exchange: parsed.exchange,
         price: null,
