@@ -26,7 +26,7 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
 const SYNC_RETRY_FAILED_LIMIT = 25;
-const HEAL_MAX_SYMBOLS = 20;
+const HEAL_MAX_SYMBOLS = 8;
 const HEAL_MAX_ROUNDS = 1;
 const SESSION_ENRICH_MAX = 8;
 
