@@ -10,8 +10,10 @@ import {
 import { CHART_TAIL_SYMBOL_INDEX } from "@/lib/chart-data";
 import {
   countTailChartErrors,
+  resolveScanJobConfig,
   retryTailSymbols,
 } from "@/lib/scan-job";
+import { buildSymbolUniverse } from "@/lib/symbols";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -36,8 +38,19 @@ export async function GET(request: NextRequest) {
   );
 
   let snapshot = await loadSnapshot();
+  const config = resolveScanJobConfig({});
+  const { symbols } = await buildSymbolUniverse({
+    includeBlueChips: config.includeBlueChips,
+    watchlistText: config.watchlistText,
+    customSymbols: config.customSymbols,
+    tradingViewWatchlistUrl: config.tradingViewWatchlistUrl,
+  });
+  const symbolIndexByYahoo = new Map(
+    symbols.map((parsed, index) => [parsed.yahoo, index]),
+  );
+
   const tailErrorsBefore = snapshot
-    ? countTailChartErrors(snapshot.results)
+    ? countTailChartErrors(snapshot.results, symbolIndexByYahoo)
     : 0;
 
   if (tailErrorsBefore === 0) {
@@ -52,9 +65,21 @@ export async function GET(request: NextRequest) {
 
   try {
     const updated = await retryTailSymbols({}, { maxSymbols });
+    if (!updated) {
+      const status = await buildCacheStatus(snapshot);
+      return NextResponse.json({
+        ...toCachedResponse(snapshot, status),
+        retried: 0,
+        tailErrorsRemaining: tailErrorsBefore,
+        message: "Tail retry skipped (scan lock held)",
+      });
+    }
+
     snapshot = await ensureLogoBackfill(updated);
     const status = await buildCacheStatus(snapshot);
-    const tailErrorsAfter = snapshot ? countTailChartErrors(snapshot.results) : 0;
+    const tailErrorsAfter = snapshot
+      ? countTailChartErrors(snapshot.results, symbolIndexByYahoo)
+      : 0;
 
     return NextResponse.json({
       ...toCachedResponse(snapshot, status),

@@ -582,13 +582,9 @@ export async function scanAndMergeSymbol(
 
 export function countTailChartErrors(
   results: StockScanResult[],
-  symbolIndexByYahoo?: Map<string, number>,
+  symbolIndexByYahoo: Map<string, number>,
 ): number {
-  const indexMap =
-    symbolIndexByYahoo ??
-    new Map(results.map((row, i) => [row.symbol, row.universeIndex ?? i]));
-
-  return results.filter((row) => isTailChartError(row, indexMap)).length;
+  return results.filter((row) => isTailChartError(row, symbolIndexByYahoo)).length;
 }
 
 /** Fire-and-forget unless already running. Returns whether a scan was started. */
