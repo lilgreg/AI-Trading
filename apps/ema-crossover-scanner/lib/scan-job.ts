@@ -13,6 +13,7 @@ import {
   getStaleAfterMs,
   isSnapshotStale,
   loadSnapshot,
+  recoverStuckScanState,
   releaseScanLock,
   saveSnapshot,
   setScanError,
@@ -678,6 +679,7 @@ export async function ensureFreshScan(
   options: { force?: boolean } = {},
 ): Promise<boolean> {
   const snapshot = await loadSnapshot();
+  await recoverStuckScanState(snapshot);
   const config = resolveScanJobConfig(overrides);
   const configKey = buildConfigKey(config);
   const configMismatch = snapshot != null && snapshot.configKey !== configKey;

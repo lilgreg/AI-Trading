@@ -6,6 +6,7 @@ import {
 import {
   buildCacheStatus,
   loadSnapshot,
+  recoverStuckScanState,
   saveSnapshot,
   toCachedResponse,
   type ScanSnapshot,
@@ -69,6 +70,7 @@ export async function GET(request: NextRequest) {
   const heal = parseHeal(searchParams);
 
   let snapshot = await loadSnapshot();
+  await recoverStuckScanState(snapshot);
   let status = await buildCacheStatus(snapshot);
 
   if (statusOnly) {
@@ -132,6 +134,7 @@ export async function GET(request: NextRequest) {
 
 export async function POST(_request: NextRequest) {
   const snapshot = await loadSnapshot();
+  await recoverStuckScanState(snapshot);
   const status = await buildCacheStatus(snapshot);
 
   if (status.scanInProgress) {

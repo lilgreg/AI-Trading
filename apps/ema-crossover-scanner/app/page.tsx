@@ -410,10 +410,7 @@ export default function HomePage() {
     setError(null);
 
     try {
-      const healQuery =
-        options?.heal === true || (!options?.quiet && options?.heal !== false)
-          ? "?heal=1"
-          : "";
+      const healQuery = options?.heal === true ? "?heal=1" : "";
       const res = await fetch(`/api/scan${healQuery}`, { cache: "no-store" });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
@@ -996,6 +993,10 @@ export default function HomePage() {
   }, [filteredResults, data]);
 
   const showEmptyState = !loading && data?.cacheEmpty && !data?.scanInProgress;
+  const showScanningState =
+    !loading &&
+    sortedResults.length === 0 &&
+    (data?.scanInProgress || (data?.cacheEmpty && !showEmptyState));
 
   return (
     <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6">
@@ -1206,6 +1207,14 @@ export default function HomePage() {
                   <td colSpan={12} className="py-12 text-center text-[var(--muted)]">
                     No cached scan yet — background scan started. This page will
                     update automatically.
+                  </td>
+                </tr>
+              ) : showScanningState ? (
+                <tr>
+                  <td colSpan={12} className="py-12 text-center text-[var(--muted)]">
+                    {data?.lastError
+                      ? `${data.lastError} — scanning…`
+                      : "Scan in progress — results will appear as symbols complete."}
                   </td>
                 </tr>
               ) : sortedResults.length === 0 ? (
