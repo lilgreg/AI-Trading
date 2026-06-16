@@ -471,65 +471,80 @@ export async function healCacheOnRead(
   overrides: Partial<ScanJobConfig> = {},
   options: { maxSymbols?: number } = {},
 ): Promise<ScanSnapshot> {
-  const maxSymbols = options.maxSymbols ?? HEAL_MAX_PER_REQUEST;
-  const toHeal = snapshot.results.filter(rowNeedsHeal).slice(0, maxSymbols);
-  if (toHeal.length === 0) return snapshot;
+  const acquired = await tryAcquireScanLock();
+  if (!acquired) return snapshot;
 
-  const config = resolveScanJobConfig(overrides);
-  const configKey = buildConfigKey(config);
-  if (snapshot.configKey !== configKey) return snapshot;
+  try {
+    const fresh = await loadSnapshot();
+    snapshot = fresh ?? snapshot;
 
-  const { symbols, sources, tradingViewWatchlistName } =
-    await buildSymbolUniverse({
-      includeBlueChips: config.includeBlueChips,
-      watchlistText: config.watchlistText,
-      customSymbols: config.customSymbols,
-      tradingViewWatchlistUrl: config.tradingViewWatchlistUrl,
-    });
+    const maxSymbols = options.maxSymbols ?? HEAL_MAX_PER_REQUEST;
+    const toHeal = snapshot.results.filter(rowNeedsHeal).slice(0, maxSymbols);
+    if (toHeal.length === 0) return snapshot;
 
-  const symbolIndexByYahoo = new Map(
-    symbols.map((parsed, index) => [parsed.yahoo, index]),
-  );
+    const config = resolveScanJobConfig(overrides);
+    const configKey = buildConfigKey(config);
+    if (snapshot.configKey !== configKey) return snapshot;
 
-  const resultsBySymbol = new Map(
-    snapshot.results.map((row) => [row.symbol, row]),
-  );
+    const { symbols, sources, tradingViewWatchlistName } =
+      await buildSymbolUniverse({
+        includeBlueChips: config.includeBlueChips,
+        watchlistText: config.watchlistText,
+        customSymbols: config.customSymbols,
+        tradingViewWatchlistUrl: config.tradingViewWatchlistUrl,
+      });
 
-  for (let i = 0; i < toHeal.length; i += 1) {
-    if (i > 0) await sleep(HEAL_RESCAN_DELAY_MS);
+    const symbolIndexByYahoo = new Map(
+      symbols.map((parsed, index) => [parsed.yahoo, index]),
+    );
 
-    const row = toHeal[i];
-    const index = row.universeIndex ?? symbolIndexByYahoo.get(row.symbol);
-    if (index == null) continue;
+    const resultsBySymbol = new Map(
+      snapshot.results.map((row) => [row.symbol, row]),
+    );
 
-    const parsed = symbols[index];
-    if (!parsed) continue;
+    for (let i = 0; i < toHeal.length; i += 1) {
+      if (i > 0) await sleep(HEAL_RESCAN_DELAY_MS);
 
-    const prior = resultsBySymbol.get(parsed.yahoo);
-    const scanned = await scanSymbol(parsed, config.historyDays, false, index, {
-      skipChartStagger: true,
-    });
-    const next = mergeScanResultPreservingQuotes(scanned, prior);
-    resultsBySymbol.set(parsed.yahoo, { ...next, universeIndex: index });
+      const row = toHeal[i];
+      const index = row.universeIndex ?? symbolIndexByYahoo.get(row.symbol);
+      if (index == null) continue;
+
+      const parsed = symbols[index];
+      if (!parsed) continue;
+
+      const prior = resultsBySymbol.get(parsed.yahoo);
+      const scanned = await scanSymbol(parsed, config.historyDays, false, index, {
+        skipChartStagger: true,
+      });
+      const next = mergeScanResultPreservingQuotes(scanned, prior);
+      resultsBySymbol.set(parsed.yahoo, { ...next, universeIndex: index });
+    }
+
+    const fallbackBySymbol = new Map(
+      snapshot.results.map((row) => [row.symbol, row]),
+    );
+    const scanComplete = isScanFullyAttempted(
+      symbols,
+      resultsBySymbol,
+      fallbackBySymbol,
+    );
+    const updated = buildSnapshot(
+      symbols,
+      resultsBySymbol,
+      fallbackBySymbol,
+      configKey,
+      sources,
+      tradingViewWatchlistName,
+      scanComplete,
+      snapshot.completedAt ?? null,
+    );
+
+    await saveSnapshot(updated);
+    setScanError(null);
+    return updated;
+  } finally {
+    await releaseScanLock();
   }
-
-  const fallbackBySymbol = new Map(
-    snapshot.results.map((row) => [row.symbol, row]),
-  );
-  const updated = buildSnapshot(
-    symbols,
-    resultsBySymbol,
-    fallbackBySymbol,
-    configKey,
-    sources,
-    tradingViewWatchlistName,
-    snapshot.scanComplete !== false,
-    snapshot.completedAt ?? null,
-  );
-
-  await saveSnapshot(updated);
-  setScanError(null);
-  return updated;
 }
 
 /** Retry chart fetch for tail symbols (index >= 122) with staggered Yahoo providers. */

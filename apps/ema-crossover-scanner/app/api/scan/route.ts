@@ -174,7 +174,9 @@ export async function GET(request: NextRequest) {
     (row) => row.error === "Not scanned yet",
   ).length ?? 0;
   const chartRefreshPendingCount = snapshot?.results?.filter(
-    (row) => row.error === "Chart data refresh pending",
+    (row) =>
+      row.error === "Chart data refresh pending" ||
+      (row.ema20 == null && row.error != null && rowNeedsChartHeal(row)),
   ).length ?? 0;
 
   return NextResponse.json(
