@@ -62,6 +62,9 @@ async function readBlobJson<T>(pathname: string): Promise<T | null> {
 
 function formatBlobError(message: string): string {
   const lower = message.toLowerCase();
+  if (lower.includes("suspended")) {
+    return "Blob storage suspended — scanning without persistent cache";
+  }
   if (
     lower.includes("quota") ||
     lower.includes("limit") ||
@@ -194,10 +197,6 @@ export async function recoverStuckScanState(
   const lock = await readScanLock();
   const persistedActive = isLockActive(lock, now);
 
-  if (memoryLockUntil > now && !persistedActive) {
-    memoryLockUntil = 0;
-  }
-
   if (snapshot == null && persistedActive) {
     const startedMs = lock?.startedAt
       ? new Date(lock.startedAt).getTime()
@@ -235,15 +234,19 @@ export async function tryAcquireScanLock(): Promise<boolean> {
       writeBlobJson(LOCK_BLOB_PATHNAME, lock),
       writeLocalJson(LOCAL_LOCK_PATH, lock).catch(() => undefined),
     ]);
-    memoryLockUntil = now + LOCK_TTL_MS;
-    return true;
   } catch (err) {
-    memoryLockUntil = 0;
     const message =
       err instanceof Error ? err.message : "Failed to acquire scan lock";
     setScanError(formatBlobError(message));
-    return false;
+    if (!hasBlobToken()) {
+      memoryLockUntil = 0;
+      return false;
+    }
+    // Blob unavailable (quota/suspended) — in-memory lock only so scan can still run.
   }
+
+  memoryLockUntil = now + LOCK_TTL_MS;
+  return true;
 }
 
 export async function releaseScanLock(): Promise<void> {
@@ -264,6 +267,10 @@ export async function isScanInProgress(): Promise<boolean> {
   const persistedActive = isLockActive(lock, now);
 
   if (memoryLockUntil > now) {
+    if (!persistedActive && hasBlobToken()) {
+      // In-memory scan while blob lock/cache unavailable.
+      return true;
+    }
     if (!persistedActive) {
       memoryLockUntil = 0;
       return false;
@@ -287,6 +294,7 @@ export async function buildCacheStatus(
 ): Promise<ScanCacheStatus> {
   const inProgress = await isScanInProgress();
   const staleAfterMinutes = getStaleAfterMs() / 60_000;
+  const lock = inProgress ? await readScanLock() : null;
 
   return {
     stale: isSnapshotStale(snapshot),
@@ -294,7 +302,13 @@ export async function buildCacheStatus(
     cacheEmpty: snapshot == null,
     staleAfterMinutes,
     lastError: getScanError(),
-    scanStartedAt: inProgress ? (await readScanLock())?.startedAt ?? null : null,
+    scanStartedAt:
+      inProgress
+        ? lock?.startedAt ??
+          (memoryLockUntil > Date.now()
+            ? new Date(memoryLockUntil - LOCK_TTL_MS).toISOString()
+            : null)
+        : null,
   };
 }
 
