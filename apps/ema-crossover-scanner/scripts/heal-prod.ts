@@ -1,5 +1,5 @@
 /** Loop production heal until success criteria pass. Run: npx tsx scripts/heal-prod.ts */
-const BASE = process.env.PROD_URL ?? "https://ai-trading-scanner.vercel.app";
+const BASE = process.env.PROD_URL ?? "https://ai-trading-scanner.workers.dev";
 const MAX_ROUNDS = Number(process.env.HEAL_ROUNDS ?? 50);
 const PAUSE_MS = Number(process.env.HEAL_PAUSE_MS ?? 20_000);
 

@@ -44,6 +44,11 @@ function hasR2Config(): boolean {
   );
 }
 
+/** Local `.cache/` is dev-only; Workers/Pages have no writable filesystem. */
+function allowLocalDiskFallback(): boolean {
+  return process.env.NODE_ENV !== "production";
+}
+
 function createR2Client(): S3Client {
   const accountId = process.env.R2_ACCOUNT_ID!;
   return new S3Client({
@@ -120,6 +125,8 @@ class R2ScanStorage implements ScanStorage {
     const fromR2 = await this.readJson<ScanSnapshot>(SNAPSHOT_KEY);
     if (fromR2?.results) return fromR2;
 
+    if (!allowLocalDiskFallback()) return null;
+
     const fromDisk = await this.local.readJson<ScanSnapshot>(SNAPSHOT_KEY);
     return fromDisk?.results ? fromDisk : null;
   }
@@ -134,10 +141,12 @@ class R2ScanStorage implements ScanStorage {
         new GetObjectCommand({ Bucket: this.bucket, Key: key }),
       );
       const body = await response.Body?.transformToString();
-      if (!body) return this.local.readJson<T>(key);
+      if (!body) {
+        return allowLocalDiskFallback() ? this.local.readJson<T>(key) : null;
+      }
       return JSON.parse(body) as T;
     } catch {
-      return this.local.readJson<T>(key);
+      return allowLocalDiskFallback() ? this.local.readJson<T>(key) : null;
     }
   }
 
@@ -150,7 +159,9 @@ class R2ScanStorage implements ScanStorage {
         ContentType: "application/json",
       }),
     );
-    await this.local.writeJson(key, data).catch(() => undefined);
+    if (allowLocalDiskFallback()) {
+      await this.local.writeJson(key, data).catch(() => undefined);
+    }
   }
 }
 

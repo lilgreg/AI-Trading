@@ -4,7 +4,7 @@ Rank stocks by how recently the **20 EMA crossed above the 50 EMA** — with **i
 
 ## What it does
 
-- Precomputes EMA/pattern scans on the server (Vercel Cron daily on Hobby; client triggers rescan when stale)
+- Precomputes EMA/pattern scans on the server (Cloudflare Cron daily; client triggers rescan when stale)
 - **Instant dashboard** — reads cached JSON snapshot in &lt;500ms
 - **Live prices** — lightweight `/api/quotes` poll every ~45s (price + Pre/Reg/AH session %)
 - Dual cross columns: **Cross 1h** and **Cross 4h** (independent sort)
@@ -20,16 +20,16 @@ Rank stocks by how recently the **20 EMA crossed above the 50 EMA** — with **i
 | EMA values, crosses, patterns | Minutes (full rescan) | Background `runBackgroundScan()` — fetches 1h bars + computes EMAs |
 | Tick-by-tick | Not supported | Would need websockets / streaming quotes architecture |
 
-Full EMA/pattern rescans take **several minutes** for ~230 symbols. On Vercel Hobby, cron runs **once daily** (`0 0 * * *`); the client polls `GET /api/scan?status=true` every 60s and triggers a background rescan when cache is older than **15 minutes** (configurable via `SCAN_STALE_MINUTES`).
+Full EMA/pattern rescans take **several minutes** for ~230 symbols. Cloudflare Cron runs **four chunked jobs nightly** (00:00–00:15 UTC); the client polls `GET /api/scan?status=true` every 60s and triggers a background rescan when cache is older than **15 minutes** (configurable via `SCAN_STALE_MINUTES`).
 
 ## Architecture
 
 ```
-Vercel Cron (daily) ──► /api/cron/scan ──► runBackgroundScan()
+Cloudflare Cron (00:00–00:15 UTC) ──► custom-worker scheduled() ──► runScanChunk()
                                               │
                                               ▼
                                     saveSnapshot() ──► Cloudflare R2 (prod)
-                                              │        .cache/ (local dev)
+                                              │        .cache/ (local dev only)
                                               ▼
 User opens app ──► GET /api/scan ──► loadSnapshot() ──► instant JSON
                       │
@@ -75,7 +75,7 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000) — loads instantly from `.cache/scan-snapshot.json`.
 
-Without R2 env vars, the app uses the local `.cache/` directory only. Production on Vercel requires R2 credentials.
+Without R2 env vars, the app uses the local `.cache/` directory only. **Production on Cloudflare requires R2 credentials** (no writable filesystem on Workers).
 
 ## Environment variables
 
@@ -85,15 +85,15 @@ Without R2 env vars, the app uses the local `.cache/` directory only. Production
 | `WATCHLIST_SYMBOLS` | optional | — | Extra comma/newline symbols |
 | `INCLUDE_BLUE_CHIPS` | | `true` | Include built-in large-cap list (30 symbols) |
 | `HISTORY_DAYS` | | `120` | Lookback for EMA (60–365) |
-| `R2_ACCOUNT_ID` | **Vercel prod** | — | Cloudflare account ID |
-| `R2_ACCESS_KEY_ID` | **Vercel prod** | — | R2 API token access key |
-| `R2_SECRET_ACCESS_KEY` | **Vercel prod** | — | R2 API token secret |
-| `R2_BUCKET_NAME` | **Vercel prod** | — | R2 bucket for scan snapshots |
-| `CRON_SECRET` | **Vercel prod** | — | Bearer token for cron route |
+| `R2_ACCOUNT_ID` | **Cloudflare prod** | — | Cloudflare account ID |
+| `R2_ACCESS_KEY_ID` | **Cloudflare prod** | — | R2 API token access key |
+| `R2_SECRET_ACCESS_KEY` | **Cloudflare prod** | — | R2 API token secret |
+| `R2_BUCKET_NAME` | **Cloudflare prod** | — | R2 bucket for scan snapshots |
+| `CRON_SECRET` | optional | — | Bearer token for manual `/api/cron/*` HTTP triggers |
 | `SCAN_STALE_MINUTES` | | `15` | Cache TTL before client/cron auto-refresh |
 | `YAHOO_TIMEOUT_MS` | | `20000` | Yahoo chart/quote timeout (ms) |
 | `YAHOO_RETRY_TIMEOUT_MS` | | `30000` | Timeout for Yahoo v8 retry pass |
-| `FINNHUB_API_KEY` | **recommended (Vercel)** | — | Free hourly bar fallback when Yahoo throttles (~symbol 120+) |
+| `FINNHUB_API_KEY` | **recommended (Cloudflare)** | — | Free hourly bar fallback when Yahoo throttles (~symbol 120+) |
 | `POLYGON_API_KEY` | optional | — | Hourly bar fallback via Polygon aggregates |
 | `TWELVE_DATA_API_KEY` | optional | — | Hourly bar fallback via Twelve Data |
 | `ALPHA_VANTAGE_API_KEY` | optional | — | Hourly bar fallback via AV intraday (strict free-tier limits) |
@@ -118,7 +118,7 @@ Hourly bars are fetched via `lib/chart-data.ts` — each symbol tries providers 
 7. Polygon / Twelve Data / Alpha Vantage (optional keys)
 8. Stooq CSV (keyless; often blocked by bot protection)
 
-**For reliable production scans**, set a free [Finnhub API key](https://finnhub.io/register) as `FINNHUB_API_KEY` on Vercel (`ai-trading-scanner` project). Without it, scans may fail after Yahoo rate-limits around symbol #120.
+**For reliable production scans**, set a free [Finnhub API key](https://finnhub.io/register) as `FINNHUB_API_KEY` on the Cloudflare Worker. Without it, scans may fail after Yahoo rate-limits around symbol #120.
 
 ## Pattern data vs TradingView
 
@@ -135,13 +135,13 @@ Hourly bars are fetched via `lib/chart-data.ts` — each symbol tries providers 
 
 ## Cloudflare R2 setup (scan cache)
 
-The app stores the precomputed scan snapshot and scan lock in **Cloudflare R2** (S3-compatible). Vercel hosts Next.js; R2 replaces the previous Vercel Blob store.
+The app stores the precomputed scan snapshot and scan lock in **Cloudflare R2** (S3-compatible API via `@aws-sdk/client-s3` + `nodejs_compat`).
 
 ### 1. Create an R2 bucket
 
 1. Log in to the [Cloudflare dashboard](https://dash.cloudflare.com/)
 2. Go to **R2 Object Storage** → **Create bucket**
-3. Name it (e.g. `ai-trading-scanner-cache`) — note the name for `R2_BUCKET_NAME`
+3. Name it (e.g. `ai-trading-scanner`) — note the name for `R2_BUCKET_NAME`
 
 ### 2. Create an API token
 
@@ -150,9 +150,17 @@ The app stores the precomputed scan snapshot and scan lock in **Cloudflare R2** 
 3. Save the **Access Key ID** and **Secret Access Key** (shown once)
 4. Copy your **Account ID** from the R2 overview page (used in the S3 endpoint)
 
-### 3. Set Vercel environment variables
+### 3. Set Cloudflare Worker secrets
 
-In the Vercel project (`ai-trading-scanner`), add:
+Use the dashboard (**Workers & Pages → ai-trading-scanner → Settings → Variables**) or Wrangler:
+
+```powershell
+# After wrangler login
+.\scripts\set-r2-cloudflare.ps1
+wrangler secret put CRON_SECRET
+wrangler secret put FINNHUB_API_KEY
+wrangler secret put TRADINGVIEW_WATCHLIST_URL
+```
 
 | Variable | Value |
 |----------|-------|
@@ -161,26 +169,70 @@ In the Vercel project (`ai-trading-scanner`), add:
 | `R2_SECRET_ACCESS_KEY` | Token secret |
 | `R2_BUCKET_NAME` | Bucket name from step 1 |
 
-Redeploy after saving. The first successful scan writes `ema-scanner/snapshot.json` to R2. No migration from Vercel Blob is required — run a fresh scan or trigger cron.
+Redeploy after saving. The first successful scan writes `ema-scanner/snapshot.json` to R2.
 
-**Removed:** `BLOB_READ_WRITE_TOKEN` and the `@vercel/blob` dependency are no longer used.
+**Removed:** `BLOB_READ_WRITE_TOKEN`, `@vercel/blob`, and `vercel.json` are no longer used.
 
-## Deploy to Vercel
+## Deploy to Cloudflare Workers (OpenNext)
 
-1. Push to GitHub and import in [Vercel](https://vercel.com/new)
-2. Configure **Cloudflare R2** (see above) and set `R2_*` env vars
-3. Set env vars: `TRADINGVIEW_WATCHLIST_URL`, `CRON_SECRET`, **`FINNHUB_API_KEY`** (free at [finnhub.io/register](https://finnhub.io/register))
-4. Deploy — `vercel.json` registers cron: `0 0 * * *` → `/api/cron/scan` (daily on Hobby)
-5. Optionally trigger first scan: `curl -H "Authorization: Bearer $CRON_SECRET" https://YOUR_APP.vercel.app/api/cron/scan`
+This app uses [@opennextjs/cloudflare](https://opennext.js.org/cloudflare/get-started) — not legacy `@cloudflare/next-on-pages`.
 
-### Vercel checklist
+### Prerequisites
 
-- [ ] R2 bucket created + `R2_*` env vars set on project
-- [ ] `CRON_SECRET` set (random string; Vercel Cron sends it automatically when configured in dashboard)
-- [ ] `TRADINGVIEW_WATCHLIST_URL` set (full watchlist — not blue chips only)
+1. [Wrangler CLI](https://developers.cloudflare.com/workers/wrangler/) v4+ (`npm install` includes it)
+2. `wrangler login` (required before first deploy)
+3. R2 bucket + secrets (see above)
+
+### Build & preview locally
+
+```bash
+cd apps/ema-crossover-scanner
+npm install
+npm run build          # Next.js build
+npm run preview        # OpenNext build + Workers runtime preview
+```
+
+Preview cron locally: `wrangler dev --test-scheduled` then `curl "http://localhost:8787/__scheduled?cron=0+*+*+*+*"`
+
+### Deploy
+
+```bash
+npm run deploy
+```
+
+Or connect GitHub in the [Cloudflare dashboard](https://dash.cloudflare.com/) — build command: `npm run deploy`, root: `apps/ema-crossover-scanner`.
+
+### Cron schedule
+
+Defined in `wrangler.jsonc` → `custom-worker.ts` (direct `runScanChunk`, not HTTP):
+
+| Cron (UTC) | Chunk |
+|------------|-------|
+| `0 0 * * *` | offset 0, limit 80 |
+| `5 0 * * *` | offset 80, limit 80 |
+| `10 0 * * *` | offset 160, limit 100 |
+| `15 0 * * *` | offset 260, limit 100 |
+
+Manual HTTP trigger (optional): `curl -H "Authorization: Bearer $CRON_SECRET" https://YOUR_WORKER.dev/api/cron/scan-chunk?offset=0&limit=80`
+
+### Cloudflare checklist
+
+- [ ] R2 bucket created + `R2_*` secrets set on worker
+- [ ] `TRADINGVIEW_WATCHLIST_URL` set
 - [ ] **`FINNHUB_API_KEY` set** (backup when Yahoo throttles after ~120 symbols)
-- [ ] Cron enabled (Hobby: daily limit)
-- [ ] Function max duration 300s (configured in `vercel.json`)
+- [ ] Cron triggers enabled (four nightly jobs in `wrangler.jsonc`)
+- [ ] **Paid Workers plan recommended** for long HTTP scans (`limits.cpu_ms` up to 300000 in `wrangler.jsonc`); free tier HTTP limit is ~30s
+- [ ] `nodejs_compat` enabled (set in `wrangler.jsonc`)
+
+### Runtime limits
+
+| Route type | Vercel (old) | Cloudflare |
+|------------|--------------|------------|
+| Cron chunks | 300s HTTP | **15 min** via `scheduled()` handler |
+| `POST /api/scan` | 300s | ~30s free / up to 300s paid (`limits.cpu_ms`) |
+| `maxDuration` export | Honored | **Ignored** — Cloudflare uses Worker limits |
+
+Client-triggered background rescans still work via stale-cache polling; nightly cron uses the scheduled handler.
 
 ## Disclaimer
 

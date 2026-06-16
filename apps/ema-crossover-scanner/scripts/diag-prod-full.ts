@@ -1,5 +1,5 @@
 /** Full production diagnostic — run: npx tsx scripts/diag-prod-full.ts */
-const BASE = process.env.PROD_URL ?? "https://ai-trading-scanner.vercel.app";
+const BASE = process.env.PROD_URL ?? "https://ai-trading-scanner.workers.dev";
 
 async function main() {
   const scanRes = await fetch(`${BASE}/api/scan`, { cache: "no-store" });

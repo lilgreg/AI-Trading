@@ -1,5 +1,5 @@
 /** Production verification — run: npx tsx scripts/verify-prod.ts */
-const BASE = process.env.PROD_URL ?? "https://ai-trading-scanner.vercel.app";
+const BASE = process.env.PROD_URL ?? "https://ai-trading-scanner.workers.dev";
 
 const BAD_ERRORS = new Set([
   "Not scanned yet",

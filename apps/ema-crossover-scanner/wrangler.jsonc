@@ -1,0 +1,38 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "main": "./custom-worker.ts",
+  "name": "ai-trading-scanner",
+  "compatibility_date": "2026-06-16",
+  "compatibility_flags": [
+    "nodejs_compat",
+    "global_fetch_strictly_public"
+  ],
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS"
+  },
+  "services": [
+    {
+      "binding": "WORKER_SELF_REFERENCE",
+      "service": "ai-trading-scanner"
+    }
+  ],
+  // Scan cache bucket (S3 API via env vars). Optional binding for Next.js ISR cache:
+  // "r2_buckets": [
+  //   { "binding": "NEXT_INC_CACHE_R2_BUCKET", "bucket_name": "ai-trading-scanner-cache" }
+  // ],
+  "triggers": {
+    "crons": [
+      "0 0 * * *",
+      "5 0 * * *",
+      "10 0 * * *",
+      "15 0 * * *"
+    ]
+  },
+  // Paid Workers: extend CPU for long scan API routes (up to 300s). Free tier: 30s HTTP limit.
+  // "limits": { "cpu_ms": 300000 },
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  }
+}

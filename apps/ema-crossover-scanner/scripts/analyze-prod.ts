@@ -1,5 +1,5 @@
 /** Quick production API analyzer — run: npx tsx scripts/analyze-prod.ts */
-const BASE = process.env.PROD_URL ?? "https://ai-trading-scanner.vercel.app";
+const BASE = process.env.PROD_URL ?? "https://ai-trading-scanner.workers.dev";
 
 async function main() {
   const statusRes = await fetch(`${BASE}/api/scan?status=true`, { cache: "no-store" });

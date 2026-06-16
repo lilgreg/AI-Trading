@@ -123,7 +123,7 @@ interface ScanLock {
 const LOCK_TTL_MS = 15 * 60 * 1000;
 /** Release lock when cache is still empty after this long (crashed scan). */
 const EMPTY_CACHE_LOCK_GRACE_MS = 2 * 60 * 1000;
-/** Vercel maxDuration is 300s — release orphan locks after scan timeout + buffer. */
+/** Release orphan locks after long scan timeout + buffer (Vercel 300s / CF scheduled up to 15m). */
 const ORPHAN_SCAN_LOCK_MS = 6 * 60 * 1000;
 
 async function readScanLock(): Promise<ScanLock | null> {

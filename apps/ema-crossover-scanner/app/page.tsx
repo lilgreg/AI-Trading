@@ -427,7 +427,7 @@ export default function HomePage() {
       const healQuery = options?.heal === true ? "?heal=1" : "";
       const res = await fetch(`/api/scan${healQuery}`, { cache: "no-store" });
       if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
         throw new Error(body.error ?? `Scan failed (${res.status})`);
       }
       const json = normalizeCachedResponse(
@@ -447,7 +447,7 @@ export default function HomePage() {
     try {
       const res = await fetch("/api/scan?force=true", { cache: "no-store" });
       if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
         throw new Error(body.error ?? `Rescan failed (${res.status})`);
       }
       const json = normalizeCachedResponse(
@@ -1358,7 +1358,7 @@ export default function HomePage() {
         patterns require neckline break; not TradingView auto-chart-patterns. Full
         EMA/pattern rescans take several minutes; prices and session % refresh every
         ~45s. When scan data is older than 15 min the client triggers a background
-        rescan (Vercel Hobby cron is daily). Tick-by-tick live data would need a
+        rescan (Cloudflare cron runs nightly in chunks). Tick-by-tick live data would need a
         different architecture. Cross requires 20 EMA to cross below 50 before crossing
         back above. Not financial advice.
       </footer>
