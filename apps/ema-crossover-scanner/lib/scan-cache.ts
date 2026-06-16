@@ -116,7 +116,7 @@ async function enrichSnapshot(snapshot: ScanSnapshot): Promise<ScanSnapshot> {
     );
 
   if (changed) {
-    void saveSnapshot(updated);
+    void saveSnapshot(updated).catch(() => undefined);
   }
 
   return updated;
@@ -135,10 +135,15 @@ export async function saveSnapshot(snapshot: ScanSnapshot): Promise<void> {
   memorySnapshot = snapshot;
   lastError = null;
 
-  await Promise.all([
-    writeBlobJson(BLOB_PATHNAME, snapshot),
-    writeLocalJson(LOCAL_SNAPSHOT_PATH, snapshot),
-  ]);
+  const writes: Promise<void>[] = [writeBlobJson(BLOB_PATHNAME, snapshot)];
+  if (!hasBlobToken()) {
+    writes.push(writeLocalJson(LOCAL_SNAPSHOT_PATH, snapshot));
+  } else {
+    writes.push(
+      writeLocalJson(LOCAL_SNAPSHOT_PATH, snapshot).catch(() => undefined),
+    );
+  }
+  await Promise.all(writes);
 }
 
 interface ScanLock {
