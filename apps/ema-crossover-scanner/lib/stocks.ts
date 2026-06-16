@@ -365,6 +365,7 @@ export const EXCLUDED_SYMBOLS = new Set([
   "HOCPF",
   "IPG",
   "K",
+  "MMC",
   "PARA",
   "RDFN",
   "RYDAF",
