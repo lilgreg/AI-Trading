@@ -84,6 +84,22 @@ export function mergeScanResultsPreservingQuotes(
   });
 }
 
+export function mergeScanResultIntoRows(
+  results: StockScanResult[],
+  incoming: StockScanResult,
+): StockScanResult[] {
+  const prevBySymbol = new Map(results.map((row) => [row.symbol, row]));
+  const prev = prevBySymbol.get(incoming.symbol);
+
+  const merged = prev
+    ? mergeScanResultsPreservingQuotes([prev], [incoming])[0]
+    : incoming;
+
+  return results.map((row) =>
+    row.symbol === incoming.symbol ? merged : row,
+  );
+}
+
 export function applyQuoteUpdates(
   results: StockScanResult[],
   updates: QuoteUpdate[],

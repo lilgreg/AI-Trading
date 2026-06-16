@@ -1,5 +1,6 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { sanitizeScanResults } from "./chart-error-sanitize";
 import { normalizeCachedResponse } from "./normalize-scan-result";
 import type { CachedScanResponse, ScanCacheStatus, ScanResponse } from "./types";
 
@@ -88,17 +89,29 @@ export async function loadSnapshot(): Promise<ScanSnapshot | null> {
 
   const fromBlob = await readBlobJson<ScanSnapshot>(BLOB_PATHNAME);
   if (fromBlob?.results) {
-    memorySnapshot = fromBlob;
-    return fromBlob;
+    memorySnapshot = sanitizeSnapshot(fromBlob);
+    return memorySnapshot;
   }
 
   const fromDisk = await readLocalJson<ScanSnapshot>(LOCAL_SNAPSHOT_PATH);
   if (fromDisk?.results) {
-    memorySnapshot = fromDisk;
-    return fromDisk;
+    memorySnapshot = sanitizeSnapshot(fromDisk);
+    return memorySnapshot;
   }
 
   return null;
+}
+
+function sanitizeSnapshot(snapshot: ScanSnapshot): ScanSnapshot {
+  const sanitizedResults = sanitizeScanResults(snapshot.results);
+  const changed = sanitizedResults.some(
+    (row, index) => row.error !== snapshot.results[index]?.error,
+  );
+  if (!changed) return snapshot;
+
+  const updated = { ...snapshot, results: sanitizedResults };
+  void saveSnapshot(updated);
+  return updated;
 }
 
 export async function saveSnapshot(snapshot: ScanSnapshot): Promise<void> {

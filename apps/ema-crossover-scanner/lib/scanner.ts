@@ -64,7 +64,9 @@ function isChartFetchError(result: StockScanResult): boolean {
     msg.includes("finnhub") ||
     msg.includes("polygon") ||
     msg.includes("alpha vantage") ||
-    msg.includes("twelve data")
+    msg.includes("twelve data") ||
+    msg.includes("stooq") ||
+    msg.includes("chart data refresh pending")
   );
 }
 

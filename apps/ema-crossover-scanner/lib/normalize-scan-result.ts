@@ -1,3 +1,4 @@
+import { sanitizeChartError } from "./chart-error-sanitize";
 import type {
   CachedScanResponse,
   CrossoverDisplay,
@@ -74,7 +75,7 @@ export function normalizeScanResult(row: LegacyScanRow): StockScanResult {
     logoUrl: row.logoUrl ?? null,
     dataSource: row.dataSource ?? null,
     universeIndex: row.universeIndex,
-    error: row.error,
+    error: sanitizeChartError(row.error),
   };
 }
 

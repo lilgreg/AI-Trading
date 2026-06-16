@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { CHART_TAIL_SYMBOL_INDEX } from "@/lib/chart-data";
 import { loadSnapshot } from "@/lib/scan-cache";
 import { fetchQuoteUpdates } from "@/lib/quotes";
 
@@ -10,6 +11,13 @@ const DEFAULT_QUOTE_CHUNK = 80;
 function parseNonNegativeInt(value: string | null, fallback: number): number {
   const parsed = Number(value ?? fallback);
   if (!Number.isFinite(parsed) || parsed < 0) return fallback;
+  return Math.floor(parsed);
+}
+
+function parseOptionalInt(value: string | null): number | null {
+  if (value == null || value.trim() === "") return null;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return null;
   return Math.floor(parsed);
 }
 
@@ -28,8 +36,24 @@ export async function GET(request: NextRequest) {
     searchParams.get("limit"),
     DEFAULT_QUOTE_CHUNK,
   );
+  const universeMin =
+    parseOptionalInt(searchParams.get("universeMin")) ??
+    parseOptionalInt(searchParams.get("tailFrom"));
+  const universeMax = parseOptionalInt(searchParams.get("universeMax"));
 
-  const symbols = snapshot.results.map((row) => row.symbol);
+  let rows = snapshot.results;
+  if (universeMin != null) {
+    rows = rows.filter(
+      (row) => (row.universeIndex ?? -1) >= universeMin,
+    );
+  }
+  if (universeMax != null) {
+    rows = rows.filter(
+      (row) => (row.universeIndex ?? Number.MAX_SAFE_INTEGER) <= universeMax,
+    );
+  }
+
+  const symbols = rows.map((row) => row.symbol);
   const quotes = await fetchQuoteUpdates(symbols, { offset, limit });
 
   return NextResponse.json(
@@ -38,6 +62,9 @@ export async function GET(request: NextRequest) {
       offset,
       limit,
       totalSymbols: symbols.length,
+      universeMin: universeMin ?? null,
+      universeMax: universeMax ?? null,
+      tailSymbolIndex: CHART_TAIL_SYMBOL_INDEX,
       quotes,
     },
     { headers: { "Cache-Control": "no-store" } },

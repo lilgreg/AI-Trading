@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { backfillMissingLogoUrls } from "@/lib/logo-backfill";
 import {
+  symbolsWithStaleChartErrors,
+} from "@/lib/chart-error-sanitize";
+import {
   buildCacheStatus,
   loadSnapshot,
   saveSnapshot,
@@ -12,6 +15,7 @@ import {
   ensureFreshScan,
   retryFailedSymbols,
   runBackgroundScan,
+  scanAndMergeSymbol,
 } from "@/lib/scan-job";
 
 export const dynamic = "force-dynamic";
@@ -38,6 +42,17 @@ async function ensureLogoBackfill(
   const updated = { ...snapshot, results };
   void saveSnapshot(updated);
   return updated;
+}
+
+function queueStaleChartRescans(snapshot: ScanSnapshot | null): void {
+  const staleSymbols = snapshot?.results
+    ? symbolsWithStaleChartErrors(snapshot.results)
+    : [];
+  if (staleSymbols.length === 0) return;
+
+  for (const symbol of staleSymbols.slice(0, 12)) {
+    void scanAndMergeSymbol(symbol).catch(() => undefined);
+  }
 }
 
 export async function GET(request: NextRequest) {
@@ -86,6 +101,7 @@ export async function GET(request: NextRequest) {
   }
 
   snapshot = await ensureLogoBackfill(snapshot);
+  queueStaleChartRescans(snapshot);
   status = await buildCacheStatus(snapshot);
 
   return NextResponse.json(toCachedResponse(snapshot, status), {

@@ -616,20 +616,56 @@ async function fetchQuoteMetaViaV8Chart(symbol: string): Promise<
   const meta = body.chart?.result?.[0]?.meta;
   if (!meta) return null;
 
+  const numMeta = (key: string): number | undefined => {
+    const value = meta[key];
+    return typeof value === "number" ? value : undefined;
+  };
+
+  const previousClose =
+    numMeta("chartPreviousClose") ??
+    numMeta("previousClose") ??
+    numMeta("regularMarketPreviousClose") ??
+    null;
+  const regularMarketPrice =
+    numMeta("regularMarketPrice") ?? numMeta("currentPrice") ?? null;
+  const preMarketPrice = numMeta("preMarketPrice") ?? null;
+  const postMarketPrice = numMeta("postMarketPrice") ?? null;
+
   const raw: Record<string, unknown> = {
     ...meta,
-    regularMarketPreviousClose:
-      meta.chartPreviousClose ?? meta.previousClose ?? meta.regularMarketPreviousClose,
-    regularMarketPrice: meta.regularMarketPrice ?? meta.currentPrice,
-    preMarketPrice: meta.preMarketPrice,
-    postMarketPrice: meta.postMarketPrice,
+    regularMarketPreviousClose: previousClose,
+    regularMarketPrice,
+    preMarketPrice,
+    postMarketPrice,
+    preMarketChangePercent:
+      numMeta("preMarketChangePercent") ??
+      (preMarketPrice != null && previousClose != null
+        ? percentChange(preMarketPrice, previousClose)
+        : undefined),
+    regularMarketChangePercent:
+      numMeta("regularMarketChangePercent") ??
+      (regularMarketPrice != null && previousClose != null
+        ? percentChange(regularMarketPrice, previousClose)
+        : undefined),
+    postMarketChangePercent:
+      numMeta("postMarketChangePercent") ??
+      (postMarketPrice != null && regularMarketPrice != null
+        ? percentChange(postMarketPrice, regularMarketPrice)
+        : undefined),
     longName: meta.longName ?? meta.shortName,
     fullExchangeName: meta.fullExchangeName ?? meta.exchangeName,
     exchange: meta.exchangeName ?? meta.exchange,
   };
 
   const parsed = parseQuoteMetaFromRecord(raw);
-  if (parsed.price == null && parsed.preMarketChange == null) return null;
+  if (
+    parsed.price == null &&
+    parsed.preMarketChange == null &&
+    parsed.regularMarketChange == null &&
+    parsed.postMarketChange == null
+  ) {
+    return null;
+  }
   return parsed;
 }
 

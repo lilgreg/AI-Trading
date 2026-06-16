@@ -63,42 +63,55 @@ function hasSessionValue(value: number | null | undefined): value is number {
   return value != null;
 }
 
+/** True on weekdays after 4:00 AM ET — today's pre-market window has started. */
+export function isAfterPreMarketStart(at: Date = new Date()): boolean {
+  const { dayOfWeek, minutesSinceMidnight: m } = getNyClock(at);
+  if (dayOfWeek === 0 || dayOfWeek === 6) return false;
+  return m >= 4 * 60;
+}
+
+/** After-hours % visible during AH and overnight closed until next 4 AM ET. */
+export function shouldShowAfterHours(
+  session: UsMarketSession = getUsMarketSession(),
+): boolean {
+  return session === "afterHours" || session === "closed";
+}
+
+/** Regular session % visible once regular hours begin (includes completed day). */
+export function shouldShowRegular(
+  session: UsMarketSession = getUsMarketSession(),
+): boolean {
+  return session === "regular" || session === "afterHours" || session === "closed";
+}
+
 /**
- * Hide session segments that have not started today or carry stale prior-day values.
- * Pre is always shown when we have data — never hide a populated preMarketChange.
+ * Session column visibility rules (ET):
+ * - Pre: show when we have data and time is after 4 AM — persists all day until next 4 AM
+ * - Reg: show during regular + AH + closed (completed regular move)
+ * - AH: show during AH + closed overnight until next 4 AM
  */
 export function filterSessionChangesForMarket(
   changes: SessionChanges,
   session: UsMarketSession = getUsMarketSession(),
 ): SessionChanges {
-  const pre = hasSessionValue(changes.preMarketChange)
-    ? changes.preMarketChange
-    : null;
+  const pre =
+    isAfterPreMarketStart() && hasSessionValue(changes.preMarketChange)
+      ? changes.preMarketChange
+      : null;
 
-  switch (session) {
-    case "pre":
-      return {
-        preMarketChange: pre,
-        regularMarketChange: null,
-        postMarketChange: null,
-      };
-    case "regular":
-      return {
-        preMarketChange: pre,
-        regularMarketChange: changes.regularMarketChange,
-        postMarketChange: null,
-      };
-    case "afterHours":
-      return {
-        preMarketChange: pre,
-        regularMarketChange: changes.regularMarketChange,
-        postMarketChange: changes.postMarketChange,
-      };
-    case "closed":
-      return {
-        preMarketChange: pre,
-        regularMarketChange: changes.regularMarketChange,
-        postMarketChange: changes.postMarketChange,
-      };
-  }
+  const regular =
+    shouldShowRegular(session) && hasSessionValue(changes.regularMarketChange)
+      ? changes.regularMarketChange
+      : null;
+
+  const postMarket =
+    shouldShowAfterHours(session) && hasSessionValue(changes.postMarketChange)
+      ? changes.postMarketChange
+      : null;
+
+  return {
+    preMarketChange: pre,
+    regularMarketChange: regular,
+    postMarketChange: postMarket,
+  };
 }

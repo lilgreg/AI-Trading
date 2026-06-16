@@ -12,7 +12,8 @@ import {
   normalizePatterns,
 } from "@/lib/normalize-scan-result";
 import { patternSortKey } from "@/lib/pattern-sort";
-import { applyQuoteUpdates, mergeScanResultsPreservingQuotes } from "@/lib/quote-updates";
+import { isStooqChartError } from "@/lib/chart-error-sanitize";
+import { applyQuoteUpdates, mergeScanResultIntoRows, mergeScanResultsPreservingQuotes } from "@/lib/quote-updates";
 import { StockLogo } from "@/components/stock-logo";
 import { NewsArticleModal } from "@/components/news-article-modal";
 import type { NewsHeadline } from "@/lib/news";
@@ -248,6 +249,8 @@ const RETRY_POLL_MS = 45_000;
 const TAIL_SYMBOL_INDEX = 122;
 const TAIL_RETRY_POLL_MS = 60_000;
 const TAIL_RETRY_MAX_ATTEMPTS = 10;
+const CHART_ERROR_RETRY_MS = 3_000;
+const CHART_ERROR_RETRY_STAGGER_MS = 2_000;
 const NEWS_POLL_MS = Number(process.env.NEXT_PUBLIC_NEWS_POLL_MS ?? 20_000);
 const SCAN_POLL_MS = 30_000;
 const NEWS_POLL_LABEL_SEC = Math.round(NEWS_POLL_MS / 1000);
@@ -256,8 +259,19 @@ function isTailRow(row: StockScanResult): boolean {
   return row.universeIndex != null && row.universeIndex >= TAIL_SYMBOL_INDEX;
 }
 
+function isChartErrorRow(row: StockScanResult): boolean {
+  if (!row.error) return false;
+  if (isStooqChartError(row.error)) return true;
+  if (row.error === "Chart data refresh pending") return true;
+  return isTailChartError(row);
+}
+
 function isTailChartError(row: StockScanResult): boolean {
   return isTailRow(row) && Boolean(row.error);
+}
+
+function countChartErrors(results: StockScanResult[] | undefined): number {
+  return results?.filter(isChartErrorRow).length ?? 0;
 }
 
 function countTailChartErrors(results: StockScanResult[] | undefined): number {
@@ -368,6 +382,8 @@ export default function HomePage() {
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const retryPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const tailRetryPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const chartErrorRetryPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const chartErrorRetryInFlightRef = useRef(false);
   const statusPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const quotesPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const quoteChunkOffsetRef = useRef(0);
@@ -551,6 +567,38 @@ export default function HomePage() {
     }
   }, []);
 
+  const applyQuotePayload = useCallback(
+    (
+      quotes: Array<{
+        symbol: string;
+        price: number | null;
+        dailyChange: number | null;
+        preMarketChange: number | null;
+        regularMarketChange: number | null;
+        postMarketChange: number | null;
+      }>,
+    ) => {
+      if (!quotes.length) return;
+
+      setQuotesLive(true);
+      setQuoteDailyBySymbol((prev) => {
+        const next = new Map(prev);
+        for (const quote of quotes) {
+          next.set(quote.symbol, quote.dailyChange);
+        }
+        return next;
+      });
+      setData((prev) => {
+        if (!prev?.results?.length) return prev;
+        return {
+          ...prev,
+          results: applyQuoteUpdates(prev.results, quotes),
+        };
+      });
+    },
+    [],
+  );
+
   const pollQuotes = useCallback(async () => {
     try {
       const totalSymbols = data?.results?.length ?? 0;
@@ -580,33 +628,16 @@ export default function HomePage() {
       quoteChunkOffsetRef.current =
         (offset + body.quotes.length) % (body.totalSymbols ?? totalSymbols);
 
-      setQuotesLive(true);
-      setQuoteDailyBySymbol((prev) => {
-        const next = new Map(prev);
-        for (const quote of body.quotes!) {
-          next.set(quote.symbol, quote.dailyChange);
-        }
-        return next;
-      });
-      setData((prev) => {
-        if (!prev?.results?.length) return prev;
-        return {
-          ...prev,
-          results: applyQuoteUpdates(prev.results, body.quotes!),
-        };
-      });
+      applyQuotePayload(body.quotes);
     } catch {
       // ignore background quote poll errors
     }
-  }, [data?.results?.length]);
+  }, [applyQuotePayload, data?.results?.length]);
 
-  const primeTailQuotes = useCallback(async () => {
+  const primeHeadQuotes = useCallback(async () => {
     try {
-      const totalSymbols = data?.results?.length ?? 0;
-      if (totalSymbols <= TAIL_SYMBOL_INDEX) return;
-
       const res = await fetch(
-        `/api/quotes?offset=${TAIL_SYMBOL_INDEX}&limit=${totalSymbols - TAIL_SYMBOL_INDEX}`,
+        `/api/quotes?universeMax=${TAIL_SYMBOL_INDEX - 1}&limit=200`,
         { cache: "no-store" },
       );
       if (!res.ok) return;
@@ -622,27 +653,79 @@ export default function HomePage() {
         }>;
       };
 
-      if (!body.quotes?.length) return;
+      applyQuotePayload(body.quotes ?? []);
+    } catch {
+      // ignore head quote priming errors
+    }
+  }, [applyQuotePayload]);
 
-      setQuotesLive(true);
-      setQuoteDailyBySymbol((prev) => {
-        const next = new Map(prev);
-        for (const quote of body.quotes!) {
-          next.set(quote.symbol, quote.dailyChange);
-        }
-        return next;
-      });
-      setData((prev) => {
-        if (!prev?.results?.length) return prev;
-        return {
-          ...prev,
-          results: applyQuoteUpdates(prev.results, body.quotes!),
-        };
-      });
+  const primeTailQuotes = useCallback(async () => {
+    try {
+      const res = await fetch(
+        `/api/quotes?universeMin=${TAIL_SYMBOL_INDEX}&limit=500`,
+        { cache: "no-store" },
+      );
+      if (!res.ok) return;
+
+      const body = (await res.json()) as {
+        quotes?: Array<{
+          symbol: string;
+          price: number | null;
+          dailyChange: number | null;
+          preMarketChange: number | null;
+          regularMarketChange: number | null;
+          postMarketChange: number | null;
+        }>;
+      };
+
+      applyQuotePayload(body.quotes ?? []);
     } catch {
       // ignore tail quote priming errors
     }
-  }, [data?.results?.length]);
+  }, [applyQuotePayload]);
+
+  const retryChartErrorSymbols = useCallback(async () => {
+    if (chartErrorRetryInFlightRef.current) return;
+
+    const errorRows =
+      data?.results?.filter(isChartErrorRow) ?? [];
+    if (errorRows.length === 0) return;
+
+    chartErrorRetryInFlightRef.current = true;
+    try {
+      const staleFirst = [...errorRows].sort((a, b) => {
+        const aStale = isStooqChartError(a.error) ? 0 : 1;
+        const bStale = isStooqChartError(b.error) ? 0 : 1;
+        return aStale - bStale;
+      });
+
+      for (let i = 0; i < staleFirst.length; i += 1) {
+        if (i > 0) await new Promise((r) => setTimeout(r, CHART_ERROR_RETRY_STAGGER_MS));
+
+        const row = staleFirst[i];
+        const res = await fetch(
+          `/api/scan/symbol?symbol=${encodeURIComponent(row.symbol)}`,
+          { cache: "no-store" },
+        );
+        if (!res.ok) continue;
+
+        const body = (await res.json()) as { result?: StockScanResult };
+        if (!body.result) continue;
+
+        setData((prev) => {
+          if (!prev?.results?.length) return prev;
+          return {
+            ...prev,
+            results: mergeScanResultIntoRows(prev.results, body.result!),
+          };
+        });
+      }
+    } catch {
+      // ignore background chart error retries
+    } finally {
+      chartErrorRetryInFlightRef.current = false;
+    }
+  }, [data?.results]);
 
   useEffect(() => {
     void fetchCache();
@@ -678,8 +761,9 @@ export default function HomePage() {
 
   useEffect(() => {
     if (!data || data.cacheEmpty) return;
+    void primeHeadQuotes();
     void primeTailQuotes();
-  }, [data?.cacheEmpty, data?.scannedAt, primeTailQuotes]);
+  }, [data?.cacheEmpty, data?.scannedAt, primeHeadQuotes, primeTailQuotes]);
 
   useEffect(() => {
     if (newsPollRef.current) clearInterval(newsPollRef.current);
@@ -767,6 +851,34 @@ export default function HomePage() {
     data?.scanInProgress,
     shouldRetryTail,
     retryTailScan,
+  ]);
+
+  const chartErrorCount = useMemo(
+    () => countChartErrors(data?.results),
+    [data?.results],
+  );
+
+  const shouldRetryChartErrors =
+    chartErrorCount > 0 && !data?.scanInProgress;
+
+  useEffect(() => {
+    if (chartErrorRetryPollRef.current) clearInterval(chartErrorRetryPollRef.current);
+    if (!data || data.cacheEmpty || data.scanInProgress) return;
+    if (!shouldRetryChartErrors) return;
+
+    void retryChartErrorSymbols();
+    chartErrorRetryPollRef.current = setInterval(() => {
+      void retryChartErrorSymbols();
+    }, CHART_ERROR_RETRY_MS);
+
+    return () => {
+      if (chartErrorRetryPollRef.current) clearInterval(chartErrorRetryPollRef.current);
+    };
+  }, [
+    data?.cacheEmpty,
+    data?.scanInProgress,
+    shouldRetryChartErrors,
+    retryChartErrorSymbols,
   ]);
 
   useLayoutEffect(() => {
