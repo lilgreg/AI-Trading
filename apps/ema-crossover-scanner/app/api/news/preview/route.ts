@@ -1,10 +1,21 @@
 import { NextResponse } from "next/server";
+import { Agent, fetch as undiciFetch } from "undici";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 15;
 
-const PREVIEW_TIMEOUT_MS = 8_000;
+const PREVIEW_TIMEOUT_MS = 10_000;
 const MAX_SUMMARY_LEN = 6_000;
+const PREVIEW_USER_AGENT =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+
+/** Some publishers send huge Set-Cookie headers — default undici limit is 16KB. */
+const previewFetchAgent = new Agent({
+  maxHeaderSize: 65536,
+  connectTimeout: PREVIEW_TIMEOUT_MS,
+  headersTimeout: PREVIEW_TIMEOUT_MS,
+  bodyTimeout: PREVIEW_TIMEOUT_MS,
+});
 
 function extractMetaContent(html: string, attr: "property" | "name", key: string): string | null {
   const pattern = new RegExp(
@@ -121,13 +132,13 @@ export async function GET(request: Request) {
   }
 
   try {
-    const res = await fetch(target.toString(), {
+    const res = await undiciFetch(target.toString(), {
+      dispatcher: previewFetchAgent,
       headers: {
-        "User-Agent":
-          "Mozilla/5.0 (compatible; EMA-Crossover-Scanner/1.0; +https://vercel.com)",
-        Accept: "text/html,application/xhtml+xml",
+        "User-Agent": PREVIEW_USER_AGENT,
+        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
       },
-      signal: AbortSignal.timeout(PREVIEW_TIMEOUT_MS),
       redirect: "follow",
     });
 

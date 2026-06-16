@@ -20,6 +20,8 @@ function formatSessionChange(value: number | null): string {
   return `${sign}${value.toFixed(2)}%`;
 }
 
+const ADEQUATE_SUMMARY_LEN = 80;
+
 function longestSummary(...candidates: (string | null | undefined)[]): string {
   let best = "";
   for (const candidate of candidates) {
@@ -27,6 +29,10 @@ function longestSummary(...candidates: (string | null | undefined)[]): string {
     if (trimmed && trimmed.length > best.length) best = trimmed;
   }
   return best;
+}
+
+function hasAdequateSummary(text: string | null | undefined): boolean {
+  return Boolean(text?.trim() && text.trim().length >= ADEQUATE_SUMMARY_LEN);
 }
 
 interface NewsArticleModalProps {
@@ -88,7 +94,13 @@ export function NewsArticleModal({ article, onClose }: NewsArticleModalProps) {
       } catch {
         // ignore preview fetch errors
       } finally {
-        if (!cancelled) setPreviewPending(false);
+        if (cancelled) return;
+        setPreviewPending(false);
+        setDisplaySummary((prev) => {
+          const best = longestSummary(prev, yahooSummary);
+          if (hasAdequateSummary(best)) return best;
+          return longestSummary(best, article.headline);
+        });
       }
     })();
 
@@ -100,8 +112,12 @@ export function NewsArticleModal({ article, onClose }: NewsArticleModalProps) {
 
   if (!article) return null;
 
-  const summaryText = displaySummary.trim();
-  const showLoadingHint = previewPending && !summaryText;
+  const summaryText = longestSummary(
+    displaySummary,
+    article.summary,
+    !previewPending ? article.headline : null,
+  );
+  const showLoadingHint = previewPending && !hasAdequateSummary(summaryText);
 
   return (
     <div

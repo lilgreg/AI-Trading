@@ -96,16 +96,27 @@ export function findMostRecentBullishCrossover(
     for (let j = i - 1; j >= 1; j--) {
       if (isBullishCross(emaFast, emaSlow, j)) break;
       if (isBearishCross(emaFast, emaSlow, j)) {
-        const ref = bars[bars.length - 1]?.date ?? new Date();
-        return {
-          date: bars[i].date,
-          msAgo: ref.getTime() - bars[i].date.getTime(),
-        };
+        return crossoverAtBar(bars, i);
       }
     }
   }
 
+  // Fallback: most recent simple 20/50 bullish cross (no prior bearish cycle required).
+  for (let i = bars.length - 1; i >= 1; i--) {
+    if (isBullishCross(emaFast, emaSlow, i)) {
+      return crossoverAtBar(bars, i);
+    }
+  }
+
   return null;
+}
+
+function crossoverAtBar(bars: OhlcBar[], index: number): CrossoverInfo {
+  const ref = bars[bars.length - 1]?.date ?? new Date();
+  return {
+    date: bars[index].date,
+    msAgo: ref.getTime() - bars[index].date.getTime(),
+  };
 }
 
 export function latestEmaValues(

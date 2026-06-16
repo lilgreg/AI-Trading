@@ -24,7 +24,7 @@ const SLOW_EMA = 50;
 const MIN_HOURLY_BARS = SLOW_EMA + 5;
 
 function historyDayFallbacks(baseDays: number): number[] {
-  return [...new Set([baseDays, 90, 120, 180])].sort((a, b) => a - b);
+  return [...new Set([baseDays, 90, 120, 180, 270, 365])].sort((a, b) => a - b);
 }
 
 async function fetchHourlyBarsWithFallback(

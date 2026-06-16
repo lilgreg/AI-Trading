@@ -42,8 +42,8 @@ const PARTIAL_SAVE_EVERY = 8;
 const DEFAULT_RETRY_BATCH = 50;
 
 function parseHistoryDays(value: string | undefined): number {
-  const parsed = Number(value ?? 120);
-  if (!Number.isFinite(parsed) || parsed < 60) return 120;
+  const parsed = Number(value ?? 180);
+  if (!Number.isFinite(parsed) || parsed < 60) return 180;
   return Math.min(parsed, 365);
 }
 
