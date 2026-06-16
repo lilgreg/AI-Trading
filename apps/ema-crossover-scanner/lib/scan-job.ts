@@ -6,7 +6,10 @@ import {
   sortByRecentCrossover,
 } from "./scanner";
 import { CHART_TAIL_SYMBOL_INDEX } from "./chart-data";
-import { rowNeedsChartHeal } from "./chart-error-sanitize";
+import {
+  rowNeedsChartHeal,
+  sanitizeScanResult,
+} from "./chart-error-sanitize";
 import { sleep } from "./request-limit";
 import { mergeScanResultsPreservingQuotes } from "./quote-updates";
 import {
@@ -456,6 +459,93 @@ function mergeScanResultPreservingQuotes(
 
 const HEAL_MAX_PER_REQUEST = 12;
 const HEAL_RESCAN_DELAY_MS = 800;
+const HEAL_LOCK_RETRY_MS = 2_000;
+const HEAL_LOCK_RETRIES = 3;
+
+function pickRowsToHeal(
+  snapshot: ScanSnapshot,
+  maxSymbols: number,
+): StockScanResult[] {
+  const unscannedRows = snapshot.results.filter(
+    (row) => row.error === "Not scanned yet",
+  );
+  const staleChartRows = snapshot.results.filter(
+    (row) => row.error !== "Not scanned yet" && rowNeedsChartHeal(row),
+  );
+  const unscannedBatch = unscannedRows.slice(0, maxSymbols);
+  const staleBatch = staleChartRows.slice(
+    0,
+    Math.max(0, maxSymbols - unscannedBatch.length),
+  );
+  return [...unscannedBatch, ...staleBatch];
+}
+
+async function mergeRowIntoFreshSnapshot(
+  yahooSymbol: string,
+  merged: StockScanResult,
+): Promise<void> {
+  const sanitized = sanitizeScanResult(merged);
+  const fresh = await loadSnapshot();
+  if (!fresh?.results?.length) return;
+
+  const results = fresh.results.map((row) =>
+    row.symbol === yahooSymbol ? sanitized : row,
+  );
+  await saveSnapshot({
+    ...fresh,
+    results,
+    lastSavedAt: new Date().toISOString(),
+  });
+}
+
+async function healRowsBatch(
+  snapshot: ScanSnapshot,
+  toHeal: StockScanResult[],
+  overrides: Partial<ScanJobConfig>,
+): Promise<ScanSnapshot> {
+  const config = resolveScanJobConfig(overrides);
+  const configKey = buildConfigKey(config);
+  if (snapshot.configKey !== configKey) return snapshot;
+
+  const { symbols } = await buildSymbolUniverse({
+    includeBlueChips: config.includeBlueChips,
+    watchlistText: config.watchlistText,
+    customSymbols: config.customSymbols,
+    tradingViewWatchlistUrl: config.tradingViewWatchlistUrl,
+  });
+
+  const symbolIndexByYahoo = new Map(
+    symbols.map((parsed, index) => [parsed.yahoo, index]),
+  );
+
+  for (let i = 0; i < toHeal.length; i += 1) {
+    if (i > 0) await sleep(HEAL_RESCAN_DELAY_MS);
+
+    const row = toHeal[i];
+    const index = row.universeIndex ?? symbolIndexByYahoo.get(row.symbol);
+    if (index == null) continue;
+
+    const parsed = symbols[index];
+    if (!parsed) continue;
+
+    const prior =
+      (await loadSnapshot())?.results?.find((r) => r.symbol === parsed.yahoo) ??
+      row;
+    const scanned = await scanSymbol(parsed, config.historyDays, false, index, {
+      skipChartStagger: true,
+    });
+    const next = sanitizeScanResult(
+      mergeScanResultPreservingQuotes(scanned, prior),
+    );
+    await mergeRowIntoFreshSnapshot(parsed.yahoo, {
+      ...next,
+      universeIndex: index,
+    });
+  }
+
+  setScanError(null);
+  return (await loadSnapshot()) ?? snapshot;
+}
 
 /**
  * Synchronously rescan rows with stale chart errors or never-scanned placeholders.
@@ -466,88 +556,28 @@ export async function healCacheOnRead(
   overrides: Partial<ScanJobConfig> = {},
   options: { maxSymbols?: number } = {},
 ): Promise<ScanSnapshot> {
-  const acquired = await tryAcquireScanLock();
-  if (!acquired) return snapshot;
+  const fresh = await loadSnapshot();
+  snapshot = fresh ?? snapshot;
+
+  const maxSymbols = options.maxSymbols ?? HEAL_MAX_PER_REQUEST;
+  const toHeal = pickRowsToHeal(snapshot, maxSymbols);
+  if (toHeal.length === 0) return snapshot;
+
+  let acquired = false;
+  for (let attempt = 0; attempt <= HEAL_LOCK_RETRIES; attempt += 1) {
+    acquired = await tryAcquireScanLock();
+    if (acquired) break;
+    if (attempt < HEAL_LOCK_RETRIES) {
+      await sleep(HEAL_LOCK_RETRY_MS);
+    }
+  }
+
+  if (!acquired) {
+    return healRowsBatch(snapshot, toHeal, overrides);
+  }
 
   try {
-    const fresh = await loadSnapshot();
-    snapshot = fresh ?? snapshot;
-
-    const maxSymbols = options.maxSymbols ?? HEAL_MAX_PER_REQUEST;
-    const unscannedRows = snapshot.results.filter(
-      (row) => row.error === "Not scanned yet",
-    );
-    const staleChartRows = snapshot.results.filter(
-      (row) => row.error !== "Not scanned yet" && rowNeedsChartHeal(row),
-    );
-    const unscannedBatch = unscannedRows.slice(0, maxSymbols);
-    const staleBatch = staleChartRows.slice(
-      0,
-      Math.max(0, maxSymbols - unscannedBatch.length),
-    );
-    const toHeal = [...unscannedBatch, ...staleBatch];
-    if (toHeal.length === 0) return snapshot;
-
-    const config = resolveScanJobConfig(overrides);
-    const configKey = buildConfigKey(config);
-    if (snapshot.configKey !== configKey) return snapshot;
-
-    const { symbols, sources, tradingViewWatchlistName } =
-      await buildSymbolUniverse({
-        includeBlueChips: config.includeBlueChips,
-        watchlistText: config.watchlistText,
-        customSymbols: config.customSymbols,
-        tradingViewWatchlistUrl: config.tradingViewWatchlistUrl,
-      });
-
-    const symbolIndexByYahoo = new Map(
-      symbols.map((parsed, index) => [parsed.yahoo, index]),
-    );
-
-    const resultsBySymbol = new Map(
-      snapshot.results.map((row) => [row.symbol, row]),
-    );
-
-    for (let i = 0; i < toHeal.length; i += 1) {
-      if (i > 0) await sleep(HEAL_RESCAN_DELAY_MS);
-
-      const row = toHeal[i];
-      const index = row.universeIndex ?? symbolIndexByYahoo.get(row.symbol);
-      if (index == null) continue;
-
-      const parsed = symbols[index];
-      if (!parsed) continue;
-
-      const prior = resultsBySymbol.get(parsed.yahoo);
-      const scanned = await scanSymbol(parsed, config.historyDays, false, index, {
-        skipChartStagger: true,
-      });
-      const next = mergeScanResultPreservingQuotes(scanned, prior);
-      resultsBySymbol.set(parsed.yahoo, { ...next, universeIndex: index });
-    }
-
-    const fallbackBySymbol = new Map(
-      snapshot.results.map((row) => [row.symbol, row]),
-    );
-    const scanComplete = isScanFullyAttempted(
-      symbols,
-      resultsBySymbol,
-      fallbackBySymbol,
-    );
-    const updated = buildSnapshot(
-      symbols,
-      resultsBySymbol,
-      fallbackBySymbol,
-      configKey,
-      sources,
-      tradingViewWatchlistName,
-      scanComplete,
-      snapshot.completedAt ?? null,
-    );
-
-    await saveSnapshot(updated);
-    setScanError(null);
-    return updated;
+    return await healRowsBatch(snapshot, toHeal, overrides);
   } finally {
     await releaseScanLock();
   }
@@ -639,10 +669,8 @@ export async function scanAndMergeSymbol(
   overrides: Partial<ScanJobConfig> = {},
 ): Promise<StockScanResult | null> {
   const config = resolveScanJobConfig(overrides);
-  const configKey = buildConfigKey(config);
 
-  const { symbols, sources, tradingViewWatchlistName } =
-    await buildSymbolUniverse({
+  const { symbols } = await buildSymbolUniverse({
       includeBlueChips: config.includeBlueChips,
       watchlistText: config.watchlistText,
       customSymbols: config.customSymbols,
@@ -660,39 +688,10 @@ export async function scanAndMergeSymbol(
     skipChartStagger: true,
   });
   const result = mergeScanResultPreservingQuotes(scanned, prior);
-  const merged = { ...result, universeIndex: index };
+  const merged = sanitizeScanResult({ ...result, universeIndex: index });
 
   if (snapshot?.results?.length) {
-    if (snapshot.configKey === configKey) {
-      const resultsBySymbol = new Map(
-        snapshot.results.map((row) => [row.symbol, row]),
-      );
-      resultsBySymbol.set(yahooSymbol, merged);
-
-      const fallbackBySymbol = new Map(
-        snapshot.results.map((row) => [row.symbol, row]),
-      );
-      const updated = buildSnapshot(
-        symbols,
-        resultsBySymbol,
-        fallbackBySymbol,
-        configKey,
-        sources,
-        tradingViewWatchlistName,
-        snapshot.scanComplete !== false,
-        snapshot.completedAt ?? null,
-      );
-      await saveSnapshot(updated);
-    } else {
-      const results = snapshot.results.map((row) =>
-        row.symbol === yahooSymbol ? merged : row,
-      );
-      await saveSnapshot({
-        ...snapshot,
-        results,
-        lastSavedAt: new Date().toISOString(),
-      });
-    }
+    await mergeRowIntoFreshSnapshot(yahooSymbol, merged);
     setScanError(null);
   }
 
