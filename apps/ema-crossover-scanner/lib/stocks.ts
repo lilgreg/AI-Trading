@@ -366,6 +366,8 @@ const TICKER_EXCHANGE: Record<string, string> = {
 const YAHOO_CHART_SYMBOL_OVERRIDES: Record<string, string> = {
   VIX: "^VIX",
   VVIX: "^VVIX",
+  BTCUSD: "BTC-USD",
+  ETHUSD: "ETH-USD",
   DJIA: "^DJI",
   DJI: "^DJI",
   SPX: "^GSPC",

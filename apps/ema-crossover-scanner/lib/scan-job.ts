@@ -95,11 +95,6 @@ export function hasUnscannedRows(results: StockScanResult[]): boolean {
   return results.some((row) => row.error === "Not scanned yet");
 }
 
-function rowNeedsHeal(row: StockScanResult): boolean {
-  if (row.error === "Not scanned yet") return true;
-  return rowNeedsChartHeal(row);
-}
-
 function buildOrderedResults(
   symbols: ParsedSymbol[],
   bySymbol: Map<string, StockScanResult>,

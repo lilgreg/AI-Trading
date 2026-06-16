@@ -19,13 +19,14 @@ export function isStaleChartError(error: string | undefined | null): boolean {
   return false;
 }
 
-/** Replace stale provider errors so UI never shows removed provider names. */
+/** Replace legacy Stooq errors; surface permanent chart failures clearly. */
 export function sanitizeChartError(
   error: string | undefined,
 ): string | undefined {
   if (!error) return error;
-  if (isStaleChartError(error)) return "Chart data refresh pending";
   if (isStooqChartError(error)) return "Chart data refresh pending";
+  if (error === "Chart data refresh pending") return error;
+  if (isAllProvidersFailedError(error)) return "No chart data available";
   return error;
 }
 
