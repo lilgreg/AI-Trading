@@ -10,8 +10,16 @@ interface HealCounts {
 
 async function fetchHealCounts(): Promise<HealCounts> {
   const res = await fetch(`${BASE}/api/scan?heal=1`, { cache: "no-store" });
-  const data = await res.json();
-  const results = data.results ?? [];
+  const text = await res.text();
+  let data: Record<string, unknown>;
+  try {
+    data = JSON.parse(text) as Record<string, unknown>;
+  } catch {
+    throw new Error(
+      `Heal request failed (${res.status}): ${text.slice(0, 120)}`,
+    );
+  }
+  const results = (data.results as { error?: string }[]) ?? [];
   const unscanned =
     data.unscannedCount ??
     results.filter((r: { error?: string }) => r.error === "Not scanned yet").length;

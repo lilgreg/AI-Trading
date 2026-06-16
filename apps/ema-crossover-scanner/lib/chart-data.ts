@@ -32,6 +32,8 @@ export interface HourlyBarsResult {
 export interface FetchHourlyBarsOptions {
   /** Universe index — symbols >= tail threshold skip slow yahoo-finance2. */
   symbolIndex?: number;
+  /** Skip per-index delay (heal/rescan paths). */
+  skipStagger?: boolean;
 }
 
 /** Symbols at/after this index use staggered Yahoo-only chart fetch (burst throttling). */
@@ -139,6 +141,7 @@ function logMissingFinnhubHint(errors: string[]): void {
 }
 
 async function applyTailStagger(options: FetchHourlyBarsOptions): Promise<void> {
+  if (options.skipStagger) return;
   if (!isTailSymbol(options) || options.symbolIndex == null) return;
   const offset = options.symbolIndex - CHART_TAIL_SYMBOL_INDEX;
   if (offset <= 0) return;

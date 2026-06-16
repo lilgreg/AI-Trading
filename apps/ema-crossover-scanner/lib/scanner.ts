@@ -76,6 +76,7 @@ export async function scanSymbol(
   historyDays: number,
   includePatternDebug = false,
   symbolIndex?: number,
+  options: { skipChartStagger?: boolean } = {},
 ): Promise<StockScanResult> {
   const tvSymbol = resolveTradingViewSymbol(parsed);
   const displayTicker = stripDisplayTicker(tvSymbol);
@@ -140,6 +141,7 @@ export async function scanSymbol(
     try {
       const chartResult = await fetchHourlyBars(chartSymbol, historyDays, {
         symbolIndex,
+        skipStagger: options.skipChartStagger,
       });
       hourly = chartResult.bars;
       dataSource = chartResult.source;

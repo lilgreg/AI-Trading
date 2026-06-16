@@ -459,8 +459,8 @@ function mergeScanResultPreservingQuotes(
   return incoming;
 }
 
-const HEAL_MAX_PER_REQUEST = 25;
-const HEAL_RESCAN_DELAY_MS = 1_500;
+const HEAL_MAX_PER_REQUEST = 12;
+const HEAL_RESCAN_DELAY_MS = 800;
 
 /**
  * Synchronously rescan rows with stale chart errors or never-scanned placeholders.
@@ -506,7 +506,9 @@ export async function healCacheOnRead(
     if (!parsed) continue;
 
     const prior = resultsBySymbol.get(parsed.yahoo);
-    const scanned = await scanSymbol(parsed, config.historyDays, false, index);
+    const scanned = await scanSymbol(parsed, config.historyDays, false, index, {
+      skipChartStagger: true,
+    });
     const next = mergeScanResultPreservingQuotes(scanned, prior);
     resultsBySymbol.set(parsed.yahoo, { ...next, universeIndex: index });
   }
@@ -579,7 +581,9 @@ export async function retryTailSymbols(
       if (!parsed || index == null) continue;
 
       const prior = resultsBySymbol.get(parsed.yahoo);
-      const scanned = await scanSymbol(parsed, config.historyDays, false, index);
+      const scanned = await scanSymbol(parsed, config.historyDays, false, index, {
+        skipChartStagger: true,
+      });
       const next = mergeScanResultPreservingQuotes(scanned, prior);
       resultsBySymbol.set(parsed.yahoo, { ...next, universeIndex: index });
     }
@@ -631,7 +635,9 @@ export async function scanAndMergeSymbol(
   const snapshot = await loadSnapshot();
   const prior = snapshot?.results?.find((row) => row.symbol === yahooSymbol);
 
-  const scanned = await scanSymbol(parsed, config.historyDays, false, index);
+  const scanned = await scanSymbol(parsed, config.historyDays, false, index, {
+    skipChartStagger: true,
+  });
   const result = mergeScanResultPreservingQuotes(scanned, prior);
   const merged = { ...result, universeIndex: index };
 
