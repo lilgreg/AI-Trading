@@ -63,16 +63,28 @@ function formatScanDataAge(scannedAt: string | null): string {
   return `${formatMsAgo(ms)} ago`;
 }
 
-function SessionChangesCell({ row }: { row: StockScanResult }) {
+function SessionChangesCell({
+  row,
+  dailyChange,
+}: {
+  row: StockScanResult;
+  dailyChange?: number | null;
+}) {
   const filtered = filterSessionChangesForMarket({
     preMarketChange: row.preMarketChange,
     regularMarketChange: row.regularMarketChange,
     postMarketChange: row.postMarketChange,
   });
 
+  const regFallback: number | null =
+    filtered.regularMarketChange ??
+    (filtered.preMarketChange == null && filtered.postMarketChange == null
+      ? (dailyChange ?? null)
+      : null);
+
   const rows = [
     { label: "Pre", value: filtered.preMarketChange },
-    { label: "Reg", value: filtered.regularMarketChange },
+    { label: "Reg", value: regFallback },
     { label: "AH", value: filtered.postMarketChange },
   ] as const;
 
@@ -198,9 +210,7 @@ function CrossoverCell({
   }
 
   return (
-    <span className="badge-muted inline-block rounded-full px-2 py-0.5 text-xs">
-      No cross in window
-    </span>
+    <span className="text-sm text-[var(--muted)]">—</span>
   );
 }
 
@@ -217,8 +227,10 @@ function rowPatternSortKey(patterns: StockScanResult["patterns"]): number {
 function crossoverCellError(
   cross: CrossoverDisplay | undefined,
   rowError?: string,
+  hasEma?: boolean,
 ): string | undefined {
   if (hasCrossover(cross)) return undefined;
+  if (hasEma) return undefined;
   return sanitizeChartError(rowError);
 }
 
@@ -1290,7 +1302,10 @@ export default function HomePage() {
                       </td>
                       <td className="mono">{formatPrice(row.price)}</td>
                       <td>
-                        <SessionChangesCell row={row} />
+                        <SessionChangesCell
+                          row={row}
+                          dailyChange={dailyChangeBySymbol.get(row.symbol)}
+                        />
                       </td>
                       <td>
                         <PatternsCell patterns={row.patterns} />
@@ -1315,13 +1330,13 @@ export default function HomePage() {
                       <td>
                         <CrossoverCell
                           cross={cross4h}
-                          error={crossoverCellError(cross4h, row.error)}
+                          error={crossoverCellError(cross4h, row.error, row.ema20 != null)}
                         />
                       </td>
                       <td>
                         <CrossoverCell
                           cross={cross1h}
-                          error={crossoverCellError(cross1h, row.error)}
+                          error={crossoverCellError(cross1h, row.error, row.ema20 != null)}
                         />
                       </td>
                     </tr>

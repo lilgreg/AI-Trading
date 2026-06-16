@@ -230,10 +230,10 @@ export async function resolveSessionChanges(
     ),
   };
 
-  const session = getUsMarketSession();
   const needsDerive =
-    session === "closed" &&
-    (merged.preMarketChange == null || merged.postMarketChange == null);
+    merged.preMarketChange == null ||
+    merged.regularMarketChange == null ||
+    merged.postMarketChange == null;
 
   if (needsDerive) {
     const fromChart = await fetchSessionChangesFromChart(row.symbol);
@@ -270,7 +270,11 @@ export function applySessionSnapshot(
 }
 
 function rowNeedsSessionEnrich(row: StockScanResult): boolean {
-  return row.preMarketChange == null || row.postMarketChange == null;
+  return (
+    row.preMarketChange == null ||
+    row.regularMarketChange == null ||
+    row.postMarketChange == null
+  );
 }
 
 /**
@@ -280,24 +284,31 @@ export async function enrichSnapshotSessions(
   results: StockScanResult[],
   options: { maxSymbols?: number } = {},
 ): Promise<{ results: StockScanResult[]; changed: boolean }> {
-  const maxSymbols = options.maxSymbols ?? 12;
+  const maxSymbols = options.maxSymbols ?? 40;
   const toEnrich = results.filter(rowNeedsSessionEnrich).slice(0, maxSymbols);
   if (toEnrich.length === 0) return { results, changed: false };
 
   const bySymbol = new Map(results.map((row) => [row.symbol, row]));
   let changed = false;
+  const ENRICH_BATCH = 6;
 
-  for (const row of toEnrich) {
-    const resolved = await resolveSessionChanges(row);
-    const next = applySessionSnapshot(row, resolved);
-    if (
-      next.preMarketChange !== row.preMarketChange ||
-      next.regularMarketChange !== row.regularMarketChange ||
-      next.postMarketChange !== row.postMarketChange ||
-      next.sessionSnapshotDate !== row.sessionSnapshotDate
-    ) {
-      bySymbol.set(row.symbol, next);
-      changed = true;
+  for (let i = 0; i < toEnrich.length; i += ENRICH_BATCH) {
+    const batch = toEnrich.slice(i, i + ENRICH_BATCH);
+    const resolvedBatch = await Promise.all(
+      batch.map((row) => resolveSessionChanges(row)),
+    );
+    for (let j = 0; j < batch.length; j += 1) {
+      const row = batch[j];
+      const next = applySessionSnapshot(row, resolvedBatch[j]);
+      if (
+        next.preMarketChange !== row.preMarketChange ||
+        next.regularMarketChange !== row.regularMarketChange ||
+        next.postMarketChange !== row.postMarketChange ||
+        next.sessionSnapshotDate !== row.sessionSnapshotDate
+      ) {
+        bySymbol.set(row.symbol, next);
+        changed = true;
+      }
     }
   }
 

@@ -89,11 +89,16 @@ export function shouldShowAfterHours(
   return session === "afterHours" || session === "closed";
 }
 
-/** Regular session % visible once regular hours begin (includes completed day). */
+/** Regular session % visible from pre-market onward (yesterday's completed move). */
 export function shouldShowRegular(
   session: UsMarketSession = getUsMarketSession(),
 ): boolean {
-  return session === "regular" || session === "afterHours" || session === "closed";
+  return (
+    session === "pre" ||
+    session === "regular" ||
+    session === "afterHours" ||
+    session === "closed"
+  );
 }
 
 /**

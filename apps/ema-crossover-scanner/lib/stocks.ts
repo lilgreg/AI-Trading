@@ -357,6 +357,26 @@ const NYSE_SYMBOLS = new Set([
   "ZTS",
 ]);
 
+/** Delisted / unfixable tickers — excluded from universe scans. */
+export const EXCLUDED_SYMBOLS = new Set([
+  "AADX",
+  "FJTSF",
+  "HES",
+  "HOCPF",
+  "IPG",
+  "K",
+  "PARA",
+  "RDFN",
+  "RYDAF",
+  "TRLV",
+  "VLKPF",
+  "VSXY",
+]);
+
+export function isExcludedSymbol(yahoo: string): boolean {
+  return EXCLUDED_SYMBOLS.has(yahoo.toUpperCase());
+}
+
 /** TradingView exchange prefix for tickers that need explicit mapping */
 const TICKER_EXCHANGE: Record<string, string> = {
   "BRK-B": "NYSE",

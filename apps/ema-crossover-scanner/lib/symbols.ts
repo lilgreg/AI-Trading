@@ -1,5 +1,6 @@
 import {
   BLUE_CHIP_SYMBOLS,
+  isExcludedSymbol,
   parseSymbol,
   parseSymbolList,
 } from "@/lib/stocks";
@@ -29,7 +30,7 @@ export async function buildSymbolUniverse(options: {
 
   const addParsed = (list: ParsedSymbol[]) => {
     for (const s of list) {
-      if (seen.has(s.yahoo)) continue;
+      if (seen.has(s.yahoo) || isExcludedSymbol(s.yahoo)) continue;
       seen.add(s.yahoo);
       symbols.push(s);
     }
@@ -41,6 +42,7 @@ export async function buildSymbolUniverse(options: {
 
   if (options.includeBlueChips) {
     for (const sym of BLUE_CHIP_SYMBOLS) {
+      if (isExcludedSymbol(sym)) continue;
       const parsed = parseSymbol(sym);
       if (!parsed || seen.has(parsed.yahoo)) continue;
       seen.add(parsed.yahoo);

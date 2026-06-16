@@ -21,6 +21,33 @@ import { aggregateHourlyTo4h, fetchQuoteMeta } from "./yahoo";
 
 const FAST_EMA = 20;
 const SLOW_EMA = 50;
+const MIN_HOURLY_BARS = SLOW_EMA + 5;
+
+function historyDayFallbacks(baseDays: number): number[] {
+  return [...new Set([baseDays, 90, 120, 180])].sort((a, b) => a - b);
+}
+
+async function fetchHourlyBarsWithFallback(
+  chartSymbol: string,
+  historyDays: number,
+  options: { symbolIndex?: number; skipStagger?: boolean },
+): Promise<Awaited<ReturnType<typeof fetchHourlyBars>>> {
+  const fallbacks = historyDayFallbacks(historyDays);
+  let lastResult: Awaited<ReturnType<typeof fetchHourlyBars>> | null = null;
+
+  for (const days of fallbacks) {
+    try {
+      const result = await fetchHourlyBars(chartSymbol, days, options);
+      lastResult = result;
+      if (result.bars.length >= MIN_HOURLY_BARS) return result;
+    } catch {
+      // try longer lookback
+    }
+  }
+
+  if (lastResult) return lastResult;
+  return fetchHourlyBars(chartSymbol, historyDays, options);
+}
 
 /** Parallel symbol scans per batch — kept low to avoid Yahoo throttling. */
 export const SCAN_BATCH_SIZE = 4;
@@ -139,7 +166,7 @@ export async function scanSymbol(
     let hourly: Awaited<ReturnType<typeof fetchHourlyBars>>["bars"];
     let dataSource: string | null = null;
     try {
-      const chartResult = await fetchHourlyBars(chartSymbol, historyDays, {
+      const chartResult = await fetchHourlyBarsWithFallback(chartSymbol, historyDays, {
         symbolIndex,
         skipStagger: options.skipChartStagger,
       });
@@ -159,7 +186,7 @@ export async function scanSymbol(
       companyName: quoteFields.name,
     });
 
-    if (bars4h.length < SLOW_EMA + 5 || hourly.length < SLOW_EMA + 5) {
+    if (bars4h.length < MIN_HOURLY_BARS || hourly.length < MIN_HOURLY_BARS) {
       return {
         ...base,
         ...quoteFields,

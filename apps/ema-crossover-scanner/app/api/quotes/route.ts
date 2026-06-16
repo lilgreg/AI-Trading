@@ -3,6 +3,7 @@ import { CHART_TAIL_SYMBOL_INDEX } from "@/lib/chart-data";
 import { applyQuoteUpdates } from "@/lib/quote-updates";
 import { loadSnapshot, saveSnapshot } from "@/lib/scan-cache";
 import { fetchQuoteUpdates } from "@/lib/quotes";
+import { enrichSnapshotSessions } from "@/lib/session-snapshot";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -60,19 +61,33 @@ export async function GET(request: NextRequest) {
     .map((row) => row.symbol);
   const quotes = await fetchQuoteUpdates(symbols, { offset, limit });
 
-  const mergedResults = applyQuoteUpdates(snapshot.results, quotes);
-  const changed = mergedResults.some((row, index) => {
-    const prev = snapshot.results[index];
-    return (
-      row.preMarketChange !== prev.preMarketChange ||
-      row.regularMarketChange !== prev.regularMarketChange ||
-      row.postMarketChange !== prev.postMarketChange ||
-      row.price !== prev.price
-    );
-  });
+  let mergedResults = applyQuoteUpdates(snapshot.results, quotes);
+  let sessionChanged = false;
+  try {
+    const enriched = await enrichSnapshotSessions(mergedResults, {
+      maxSymbols: 20,
+    });
+    mergedResults = enriched.results;
+    sessionChanged = enriched.changed;
+  } catch {
+    // best-effort session enrich
+  }
+
+  const changed =
+    sessionChanged ||
+    mergedResults.some((row, index) => {
+      const prev = snapshot.results[index];
+      return (
+        row.preMarketChange !== prev.preMarketChange ||
+        row.regularMarketChange !== prev.regularMarketChange ||
+        row.postMarketChange !== prev.postMarketChange ||
+        row.price !== prev.price ||
+        row.sessionSnapshotDate !== prev.sessionSnapshotDate
+      );
+    });
 
   if (changed) {
-    void saveSnapshot({
+    await saveSnapshot({
       ...snapshot,
       results: mergedResults,
       lastSavedAt: new Date().toISOString(),

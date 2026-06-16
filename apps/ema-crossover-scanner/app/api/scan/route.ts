@@ -29,7 +29,7 @@ export const maxDuration = 300;
 const SYNC_RETRY_FAILED_LIMIT = 25;
 const HEAL_MAX_SYMBOLS = 12;
 const HEAL_MAX_ROUNDS = 1;
-const SESSION_ENRICH_MAX = 8;
+const SESSION_ENRICH_MAX = 40;
 
 function parseForce(searchParams: URLSearchParams): boolean {
   return searchParams.get("force") === "true";
