@@ -28,7 +28,7 @@ export const maxDuration = 300;
 const SYNC_RETRY_FAILED_LIMIT = 25;
 const HEAL_MAX_SYMBOLS = 20;
 const HEAL_MAX_ROUNDS = 1;
-const SESSION_ENRICH_MAX = 16;
+const SESSION_ENRICH_MAX = 8;
 
 function parseForce(searchParams: URLSearchParams): boolean {
   return searchParams.get("force") === "true";
@@ -117,8 +117,10 @@ export async function GET(request: NextRequest) {
   snapshot = await ensureLogoBackfill(snapshot);
 
   const shouldHeal =
+    heal &&
     snapshot?.results?.length &&
-    (heal || hasUnscannedRows(snapshot.results));
+    !status.scanInProgress &&
+    hasUnscannedRows(snapshot.results);
 
   if (shouldHeal) {
     try {
@@ -134,11 +136,11 @@ export async function GET(request: NextRequest) {
     } catch {
       // return best-effort snapshot if inline heal fails
     }
-  } else {
+  } else if (!status.scanInProgress) {
     queueStaleChartRescans(snapshot);
   }
 
-  if (snapshot?.results?.length) {
+  if (snapshot?.results?.length && !status.scanInProgress) {
     try {
       const { results, changed } = await enrichSnapshotSessions(
         snapshot.results,
