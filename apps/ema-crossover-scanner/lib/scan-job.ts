@@ -479,7 +479,18 @@ export async function healCacheOnRead(
     snapshot = fresh ?? snapshot;
 
     const maxSymbols = options.maxSymbols ?? HEAL_MAX_PER_REQUEST;
-    const toHeal = snapshot.results.filter(rowNeedsHeal).slice(0, maxSymbols);
+    const unscannedRows = snapshot.results.filter(
+      (row) => row.error === "Not scanned yet",
+    );
+    const staleChartRows = snapshot.results.filter(
+      (row) => row.error !== "Not scanned yet" && rowNeedsChartHeal(row),
+    );
+    const unscannedBatch = unscannedRows.slice(0, maxSymbols);
+    const staleBatch = staleChartRows.slice(
+      0,
+      Math.max(0, maxSymbols - unscannedBatch.length),
+    );
+    const toHeal = [...unscannedBatch, ...staleBatch];
     if (toHeal.length === 0) return snapshot;
 
     const config = resolveScanJobConfig(overrides);

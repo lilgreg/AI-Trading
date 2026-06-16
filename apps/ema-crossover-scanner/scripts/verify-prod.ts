@@ -48,6 +48,27 @@ async function main() {
   }
 
   const withEma = results.filter((r: { ema20?: number | null }) => r.ema20 != null).length;
+  const issues = results.filter(
+    (r: { error?: string }) =>
+      r.error === "Not scanned yet" ||
+      r.error === "Chart data refresh pending",
+  );
+  console.log("\n=== REMAINING ISSUES ===");
+  console.log(
+    issues.length === 0
+      ? "none"
+      : issues
+          .map(
+            (r: {
+              symbol?: string;
+              displayTicker?: string;
+              error?: string;
+              universeIndex?: number;
+            }) =>
+              `${r.universeIndex ?? "?"}:${r.displayTicker ?? r.symbol} (${r.error})`,
+          )
+          .join("\n"),
+  );
   console.log("\n=== SUMMARY ===");
   console.log("withEma:", withEma, "/", results.length);
 }
