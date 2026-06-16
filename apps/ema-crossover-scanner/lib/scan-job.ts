@@ -1,9 +1,12 @@
 import { createHash } from "node:crypto";
 import {
   isChartFetchError,
+  scanSymbol,
   scanSymbols,
   sortByRecentCrossover,
 } from "./scanner";
+import { CHART_TAIL_SYMBOL_INDEX } from "./chart-data";
+import { sleep } from "./request-limit";
 import {
   buildCacheStatus,
   getStaleAfterMs,
@@ -260,7 +263,20 @@ async function mergeScanResults(
             Boolean(result.error) &&
             result.ema20 == null;
 
-          resultsBySymbol.set(result.symbol, keepPrior ? prior : result);
+          let next = keepPrior ? prior : result;
+
+          if (!keepPrior && prior && result.error) {
+            next = {
+              ...result,
+              price: result.price ?? prior.price,
+              preMarketChange: result.preMarketChange ?? prior.preMarketChange,
+              regularMarketChange:
+                result.regularMarketChange ?? prior.regularMarketChange,
+              postMarketChange: result.postMarketChange ?? prior.postMarketChange,
+            };
+          }
+
+          resultsBySymbol.set(result.symbol, { ...next, universeIndex: symbolIndexByYahoo.get(result.symbol) });
           completedSinceSave += 1;
           if (completedSinceSave >= PARTIAL_SAVE_EVERY) {
             completedSinceSave = 0;
@@ -397,6 +413,182 @@ export async function retryFailedSymbolsInBackground(
     });
 
   return true;
+}
+
+const TAIL_RETRY_MAX_PER_CALL = 5;
+const TAIL_RETRY_DELAY_MS = 3_000;
+
+function isTailChartError(
+  row: StockScanResult,
+  symbolIndexByYahoo: Map<string, number>,
+): boolean {
+  const idx = row.universeIndex ?? symbolIndexByYahoo.get(row.symbol);
+  if (idx == null || idx < CHART_TAIL_SYMBOL_INDEX) return false;
+  return Boolean(row.error) && isChartFetchError(row);
+}
+
+function mergeScanResultPreservingQuotes(
+  incoming: StockScanResult,
+  prior: StockScanResult | undefined,
+): StockScanResult {
+  if (!prior) return incoming;
+
+  if (isSuccessfulResult(prior) && incoming.error && incoming.ema20 == null) {
+    return { ...prior, universeIndex: incoming.universeIndex ?? prior.universeIndex };
+  }
+
+  if (incoming.error) {
+    return {
+      ...incoming,
+      price: incoming.price ?? prior.price,
+      preMarketChange: incoming.preMarketChange ?? prior.preMarketChange,
+      regularMarketChange:
+        incoming.regularMarketChange ?? prior.regularMarketChange,
+      postMarketChange: incoming.postMarketChange ?? prior.postMarketChange,
+    };
+  }
+
+  return incoming;
+}
+
+/** Retry chart fetch for tail symbols (index >= 122) with staggered Yahoo providers. */
+export async function retryTailSymbols(
+  overrides: Partial<ScanJobConfig> = {},
+  options: { maxSymbols?: number } = {},
+): Promise<ScanSnapshot | null> {
+  const maxSymbols = options.maxSymbols ?? TAIL_RETRY_MAX_PER_CALL;
+  const snapshot = await loadSnapshot();
+  if (!snapshot?.results?.length) return null;
+
+  const config = resolveScanJobConfig(overrides);
+  const configKey = buildConfigKey(config);
+  if (snapshot.configKey !== configKey) return null;
+
+  const { symbols, sources, tradingViewWatchlistName } =
+    await buildSymbolUniverse({
+      includeBlueChips: config.includeBlueChips,
+      watchlistText: config.watchlistText,
+      customSymbols: config.customSymbols,
+      tradingViewWatchlistUrl: config.tradingViewWatchlistUrl,
+    });
+
+  const symbolIndexByYahoo = new Map(
+    symbols.map((parsed, index) => [parsed.yahoo, index]),
+  );
+
+  const toRetry = snapshot.results.filter((row) =>
+    isTailChartError(row, symbolIndexByYahoo),
+  );
+  if (toRetry.length === 0) return snapshot;
+
+  const acquired = await tryAcquireScanLock();
+  if (!acquired) return null;
+
+  try {
+    const resultsBySymbol = new Map(
+      snapshot.results.map((row) => [row.symbol, row]),
+    );
+    const batch = toRetry.slice(0, maxSymbols);
+
+    for (let i = 0; i < batch.length; i += 1) {
+      if (i > 0) await sleep(TAIL_RETRY_DELAY_MS);
+
+      const row = batch[i];
+      const index = row.universeIndex ?? symbolIndexByYahoo.get(row.symbol);
+      const parsed =
+        index != null ? symbols[index] : symbols.find((s) => s.yahoo === row.symbol);
+      if (!parsed || index == null) continue;
+
+      const prior = resultsBySymbol.get(parsed.yahoo);
+      const scanned = await scanSymbol(parsed, config.historyDays, false, index);
+      const next = mergeScanResultPreservingQuotes(scanned, prior);
+      resultsBySymbol.set(parsed.yahoo, { ...next, universeIndex: index });
+    }
+
+    const fallbackBySymbol = new Map(snapshot.results.map((row) => [row.symbol, row]));
+    const updated = buildSnapshot(
+      symbols,
+      resultsBySymbol,
+      fallbackBySymbol,
+      configKey,
+      sources,
+      tradingViewWatchlistName,
+      snapshot.scanComplete !== false,
+      snapshot.completedAt ?? null,
+    );
+
+    await saveSnapshot(updated);
+    setScanError(null);
+    return updated;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Tail retry failed";
+    setScanError(message);
+    throw err;
+  } finally {
+    await releaseScanLock();
+  }
+}
+
+/** Scan one symbol and merge into the cached snapshot. */
+export async function scanAndMergeSymbol(
+  yahooSymbol: string,
+  overrides: Partial<ScanJobConfig> = {},
+): Promise<StockScanResult | null> {
+  const config = resolveScanJobConfig(overrides);
+  const configKey = buildConfigKey(config);
+
+  const { symbols, sources, tradingViewWatchlistName } =
+    await buildSymbolUniverse({
+      includeBlueChips: config.includeBlueChips,
+      watchlistText: config.watchlistText,
+      customSymbols: config.customSymbols,
+      tradingViewWatchlistUrl: config.tradingViewWatchlistUrl,
+    });
+
+  const index = symbols.findIndex((parsed) => parsed.yahoo === yahooSymbol);
+  if (index < 0) return null;
+
+  const parsed = symbols[index];
+  const snapshot = await loadSnapshot();
+  const prior = snapshot?.results?.find((row) => row.symbol === yahooSymbol);
+
+  const scanned = await scanSymbol(parsed, config.historyDays, false, index);
+  const result = mergeScanResultPreservingQuotes(scanned, prior);
+  const merged = { ...result, universeIndex: index };
+
+  if (snapshot?.configKey === configKey && snapshot.results?.length) {
+    const resultsBySymbol = new Map(
+      snapshot.results.map((row) => [row.symbol, row]),
+    );
+    resultsBySymbol.set(yahooSymbol, merged);
+
+    const fallbackBySymbol = new Map(snapshot.results.map((row) => [row.symbol, row]));
+    const updated = buildSnapshot(
+      symbols,
+      resultsBySymbol,
+      fallbackBySymbol,
+      configKey,
+      sources,
+      tradingViewWatchlistName,
+      snapshot.scanComplete !== false,
+      snapshot.completedAt ?? null,
+    );
+    await saveSnapshot(updated);
+    setScanError(null);
+  }
+
+  return merged;
+}
+
+export function countTailChartErrors(
+  results: StockScanResult[],
+  symbolIndexByYahoo?: Map<string, number>,
+): number {
+  const indexMap =
+    symbolIndexByYahoo ??
+    new Map(results.map((row, i) => [row.symbol, row.universeIndex ?? i]));
+
+  return results.filter((row) => isTailChartError(row, indexMap)).length;
 }
 
 /** Fire-and-forget unless already running. Returns whether a scan was started. */

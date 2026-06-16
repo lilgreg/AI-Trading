@@ -72,6 +72,8 @@ export function normalizeScanResult(row: LegacyScanRow): StockScanResult {
     cross4h: normalizeCrossover(row.cross4h ?? legacyCross),
     tradingViewUrl: row.tradingViewUrl ?? "#",
     logoUrl: row.logoUrl ?? null,
+    dataSource: row.dataSource ?? null,
+    universeIndex: row.universeIndex,
     error: row.error,
   };
 }

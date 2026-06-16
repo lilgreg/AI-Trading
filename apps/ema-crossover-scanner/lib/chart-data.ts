@@ -9,19 +9,16 @@ import {
   isFinnhubConfigured,
 } from "./finnhub";
 import { fetchPolygonHourlyBars, isPolygonConfigured } from "./polygon";
-import { fetchStooqHourlyBars } from "./stooq";
 import {
   fetchTwelveDataHourlyBars,
   isTwelveDataConfigured,
 } from "./twelve-data";
-import { yahooLimiter } from "./request-limit";
+import { sleep, yahooLimiter } from "./request-limit";
 import {
   fetchYahooChartV8Direct,
   fetchYahooChartV8Range,
-  fetchYahooFinance2HourlyBars,
   fetchYahooSparkHourlyBars,
-  YAHOO_RETRY_TIMEOUT_MS,
-  YAHOO_TIMEOUT_MS,
+  YAHOO_CHART_TIMEOUT_MS,
 } from "./yahoo";
 
 export type Bar = OhlcBar;
@@ -36,10 +33,13 @@ export interface FetchHourlyBarsOptions {
   symbolIndex?: number;
 }
 
-/** Symbols at/after this index skip yahoo-finance2 (often throttled after ~120). */
+/** Symbols at/after this index use staggered Yahoo-only chart fetch (burst throttling). */
 export const CHART_TAIL_SYMBOL_INDEX = Number(
-  process.env.CHART_TAIL_SYMBOL_INDEX ?? 120,
+  process.env.CHART_TAIL_SYMBOL_INDEX ?? 122,
 );
+
+/** Per-index delay before first chart attempt for tail symbols. */
+const TAIL_STAGGER_MS = Number(process.env.CHART_TAIL_STAGGER_MS ?? 1_500);
 
 type ChartProvider = {
   name: string;
@@ -51,58 +51,33 @@ function skipYahooProviders(): boolean {
   return process.env.CHART_SKIP_YAHOO === "1" || process.env.CHART_SKIP_YAHOO === "true";
 }
 
-function skipSlowYahooProviders(): boolean {
-  return (
-    process.env.CHART_SKIP_YAHOO_SLOW === "1" ||
-    process.env.CHART_SKIP_YAHOO_SLOW === "true"
-  );
-}
-
-function yahooProviders(options: FetchHourlyBarsOptions = {}): ChartProvider[] {
+/** Scan chart path uses direct Yahoo HTTP only — no yahoo-finance2 library. */
+function yahooProviders(): ChartProvider[] {
   if (skipYahooProviders()) return [];
 
-  const tailSymbol =
-    options.symbolIndex != null && options.symbolIndex >= CHART_TAIL_SYMBOL_INDEX;
-  const skipSlow = skipSlowYahooProviders() || tailSymbol;
-
-  const providers: ChartProvider[] = [
+  return [
     {
       name: "yahoo-v8",
       fetch: (symbol, days) =>
-        yahooLimiter.run(() => fetchYahooChartV8Direct(symbol, days, YAHOO_TIMEOUT_MS)),
+        yahooLimiter.run(() =>
+          fetchYahooChartV8Direct(symbol, days, YAHOO_CHART_TIMEOUT_MS),
+        ),
     },
     {
       name: "yahoo-spark",
       fetch: (symbol, days) =>
-        yahooLimiter.run(() => fetchYahooSparkHourlyBars(symbol, days, YAHOO_TIMEOUT_MS)),
+        yahooLimiter.run(() =>
+          fetchYahooSparkHourlyBars(symbol, days, YAHOO_CHART_TIMEOUT_MS),
+        ),
     },
     {
       name: "yahoo-v8-range",
       fetch: (symbol, days) =>
-        yahooLimiter.run(() => fetchYahooChartV8Range(symbol, days, YAHOO_TIMEOUT_MS)),
+        yahooLimiter.run(() =>
+          fetchYahooChartV8Range(symbol, days, YAHOO_CHART_TIMEOUT_MS),
+        ),
     },
   ];
-
-  if (!skipSlow) {
-    providers.push(
-      {
-        name: "yahoo-finance2",
-        fetch: (symbol, days) =>
-          yahooLimiter.run(() =>
-            fetchYahooFinance2HourlyBars(symbol, days, YAHOO_TIMEOUT_MS),
-          ),
-      },
-      {
-        name: "yahoo-v8-retry",
-        fetch: (symbol, days) =>
-          yahooLimiter.run(() =>
-            fetchYahooChartV8Direct(symbol, days, YAHOO_RETRY_TIMEOUT_MS),
-          ),
-      },
-    );
-  }
-
-  return providers;
 }
 
 function backupProviders(): ChartProvider[] {
@@ -127,10 +102,6 @@ function backupProviders(): ChartProvider[] {
       enabled: isAlphaVantageConfigured,
       fetch: fetchAlphaVantageHourlyBars,
     },
-    {
-      name: "stooq",
-      fetch: fetchStooqHourlyBars,
-    },
   ];
 }
 
@@ -145,19 +116,15 @@ function configuredBackupProviders(): ChartProvider[] {
 }
 
 function allProviders(options: FetchHourlyBarsOptions = {}): ChartProvider[] {
-  const yahoo = yahooProviders(options);
-  const backups = configuredBackupProviders();
+  const yahoo = yahooProviders();
 
-  // When Finnhub (or another configured backup) exists, try it before Yahoo for tail
-  // symbols that hit rate limits after ~120 requests. Skip Stooq-first — it often
-  // hits a bot wall and adds latency without helping when no API key is set.
-  if (isTailSymbol(options) && backups.some((p) => p.name === "finnhub")) {
-    const finnhub = backups.filter((p) => p.name === "finnhub");
-    const rest = backups.filter((p) => p.name !== "finnhub");
-    return [...finnhub, ...yahoo, ...rest];
+  // Tail symbols: Yahoo v8 → spark → v8-range, then Finnhub only.
+  if (isTailSymbol(options)) {
+    const finnhub = configuredBackupProviders().filter((p) => p.name === "finnhub");
+    return [...yahoo, ...finnhub];
   }
 
-  return [...yahoo, ...backups];
+  return [...yahoo, ...configuredBackupProviders()];
 }
 
 function logMissingFinnhubHint(errors: string[]): void {
@@ -170,6 +137,13 @@ function logMissingFinnhubHint(errors: string[]): void {
   );
 }
 
+async function applyTailStagger(options: FetchHourlyBarsOptions): Promise<void> {
+  if (!isTailSymbol(options) || options.symbolIndex == null) return;
+  const offset = options.symbolIndex - CHART_TAIL_SYMBOL_INDEX;
+  if (offset <= 0) return;
+  await sleep(TAIL_STAGGER_MS * offset);
+}
+
 /**
  * Fetch hourly OHLC bars — tries Yahoo endpoints then backup APIs until one succeeds.
  */
@@ -180,6 +154,8 @@ export async function fetchHourlyBars(
 ): Promise<HourlyBarsResult> {
   const cached = getCachedHourlyBars(symbol, days);
   if (cached) return cached;
+
+  await applyTailStagger(options);
 
   const errors: string[] = [];
   const tried: string[] = [];

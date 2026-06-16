@@ -4,7 +4,6 @@ import { computeDailyChangeFromPrices } from "./daily-change";
 import type { OhlcBar } from "./ema";
 import type { ScanInterval } from "./intervals";
 import {
-  filterSessionChangesForMarket,
   getUsMarketSession,
 } from "./market-session";
 import { retryWithBackoff, sleep, yahooLimiter } from "./request-limit";
@@ -23,6 +22,8 @@ export const YAHOO_RETRY_TIMEOUT_MS = parseTimeoutMs(
   30_000,
   20_000,
 );
+/** Cap chart HTTP timeouts so Vercel YAHOO_TIMEOUT_MS=15000 does not block failover. */
+export const YAHOO_CHART_TIMEOUT_MS = Math.min(YAHOO_TIMEOUT_MS, 5_000);
 
 const YAHOO_USER_AGENTS = [
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -314,22 +315,16 @@ export async function fetchYahooFinance2HourlyBars(
 
 async function fetchYahooHourlyBarsOnce(symbol: string, days: number): Promise<OhlcBar[]> {
   try {
-    return await fetchYahooChartV8Direct(symbol, days, YAHOO_TIMEOUT_MS);
+    return await fetchYahooChartV8Direct(symbol, days, YAHOO_CHART_TIMEOUT_MS);
   } catch (v8Err) {
     if (!isRetryableYahooError(v8Err)) throw v8Err;
     await sleep(300);
     try {
-      return await fetchYahooSparkHourlyBars(symbol, days, YAHOO_TIMEOUT_MS);
+      return await fetchYahooSparkHourlyBars(symbol, days, YAHOO_CHART_TIMEOUT_MS);
     } catch (sparkErr) {
       if (!isRetryableYahooError(sparkErr)) throw sparkErr;
       await sleep(400);
-      try {
-        return await fetchYahooChartV8Range(symbol, days, YAHOO_TIMEOUT_MS);
-      } catch (rangeErr) {
-        if (!isRetryableYahooError(rangeErr)) throw rangeErr;
-        await sleep(500);
-        return fetchYahooFinance2HourlyBars(symbol, days, YAHOO_RETRY_TIMEOUT_MS);
-      }
+      return fetchYahooChartV8Range(symbol, days, YAHOO_CHART_TIMEOUT_MS);
     }
   }
 }
@@ -553,7 +548,8 @@ function parseQuoteMetaFromRecord(raw: Record<string, unknown>): {
   dailyChange: number | null;
 } & QuoteSessionChanges {
   const prices = quotePrices(raw);
-  const sessionChanges = filterSessionChangesForMarket(computeSessionChanges(raw));
+  // Store raw session % — filter only at display time (market-session.ts).
+  const sessionChanges = computeSessionChanges(raw);
   const dailyFromPrices = computeDailyChangeFromPrices(prices);
   const dailyFromQuote =
     typeof raw.regularMarketChangePercent === "number"
@@ -613,7 +609,7 @@ async function fetchQuoteMetaViaV8Chart(symbol: string): Promise<
         };
       }>;
     }),
-    YAHOO_TIMEOUT_MS,
+    YAHOO_CHART_TIMEOUT_MS,
     `Yahoo v8 quote for ${symbol}`,
   );
 
@@ -655,18 +651,28 @@ export async function fetchQuoteMeta(symbol: string): Promise<{
   quoteExchange: string | null;
   dailyChange: number | null;
 } & QuoteSessionChanges> {
+  // Direct v8 HTTP first — avoids yahoo-finance2 quote timeouts on tail symbols.
+  try {
+    const viaV8 = await yahooLimiter.run(() =>
+      fetchQuoteMetaViaV8Chart(symbol),
+    );
+    if (viaV8) return viaV8;
+  } catch {
+    // fall through to library quote
+  }
+
   try {
     const quote = await yahooLimiter.run(() =>
       retryWithBackoff(
         () =>
           withTimeout(
             yahooFinance.quote(symbol),
-            YAHOO_TIMEOUT_MS,
+            YAHOO_CHART_TIMEOUT_MS,
             `Yahoo quote for ${symbol}`,
           ),
         {
-          attempts: 3,
-          baseDelayMs: 800,
+          attempts: 2,
+          baseDelayMs: 600,
           label: `Yahoo quote for ${symbol}`,
           shouldRetry: isRetryableYahooError,
         },
@@ -674,20 +680,6 @@ export async function fetchQuoteMeta(symbol: string): Promise<{
     );
     return parseQuoteMetaFromRecord(quote as unknown as Record<string, unknown>);
   } catch {
-    try {
-      const viaV8 = await yahooLimiter.run(() =>
-        retryWithBackoff(() => fetchQuoteMetaViaV8Chart(symbol), {
-          attempts: 2,
-          baseDelayMs: 600,
-          label: `Yahoo v8 quote for ${symbol}`,
-          shouldRetry: isRetryableYahooError,
-        }),
-      );
-      if (viaV8) return viaV8;
-    } catch {
-      // fall through to empty meta
-    }
-
     return { ...EMPTY_QUOTE_META };
   }
 }

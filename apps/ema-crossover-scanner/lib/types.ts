@@ -85,6 +85,8 @@ export interface StockScanResult {
   logoUrl?: string | null;
   /** Hourly bar provider used for this scan (yahoo-v8, yahoo-spark, finnhub, etc.). */
   dataSource?: string | null;
+  /** Position in the configured symbol universe (0-based). */
+  universeIndex?: number;
   error?: string;
 }
 

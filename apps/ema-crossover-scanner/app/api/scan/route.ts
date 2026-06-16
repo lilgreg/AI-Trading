@@ -10,12 +10,14 @@ import {
 import {
   countRetryableResults,
   ensureFreshScan,
-  retryFailedSymbolsInBackground,
+  retryFailedSymbols,
   runBackgroundScan,
 } from "@/lib/scan-job";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
+
+const SYNC_RETRY_FAILED_LIMIT = 10;
 
 function parseForce(searchParams: URLSearchParams): boolean {
   return searchParams.get("force") === "true";
@@ -64,12 +66,23 @@ export async function GET(request: NextRequest) {
     void ensureFreshScan({}, { force: true });
   } else if (status.cacheEmpty || status.stale) {
     void ensureFreshScan({});
-  } else if (
+  }
+
+  if (
     !status.scanInProgress &&
-    snapshot &&
+    snapshot?.results?.length &&
     countRetryableResults(snapshot.results) > 0
   ) {
-    void retryFailedSymbolsInBackground({});
+    try {
+      const retried = await retryFailedSymbols({}, {
+        maxSymbols: SYNC_RETRY_FAILED_LIMIT,
+      });
+      if (retried) {
+        snapshot = retried;
+      }
+    } catch {
+      // return cached snapshot if inline retry fails
+    }
   }
 
   snapshot = await ensureLogoBackfill(snapshot);

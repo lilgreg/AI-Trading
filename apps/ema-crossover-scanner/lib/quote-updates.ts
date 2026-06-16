@@ -9,18 +9,47 @@ export interface QuoteUpdate {
   postMarketChange: number | null;
 }
 
+/** Never replace a populated session % with null/undefined from a partial poll. */
 function mergeSessionChange(
-  incoming: number | null,
-  existing: number | null,
+  incoming: number | null | undefined,
+  existing: number | null | undefined,
 ): number | null {
-  return incoming ?? existing;
+  if (incoming != null) return incoming;
+  if (existing != null) return existing;
+  return null;
 }
 
 function mergeNullableNumber(
   incoming: number | null | undefined,
   existing: number | null | undefined,
 ): number | null {
-  return incoming ?? existing ?? null;
+  if (incoming != null) return incoming;
+  if (existing != null) return existing;
+  return null;
+}
+
+function preserveSessionFields(
+  incoming: StockScanResult,
+  existing: StockScanResult,
+): Pick<
+  StockScanResult,
+  "preMarketChange" | "regularMarketChange" | "postMarketChange" | "price"
+> {
+  return {
+    price: mergeNullableNumber(incoming.price, existing.price),
+    preMarketChange: mergeSessionChange(
+      incoming.preMarketChange,
+      existing.preMarketChange,
+    ),
+    regularMarketChange: mergeSessionChange(
+      incoming.regularMarketChange,
+      existing.regularMarketChange,
+    ),
+    postMarketChange: mergeSessionChange(
+      incoming.postMarketChange,
+      existing.postMarketChange,
+    ),
+  };
 }
 
 /** Keep live quote/session fields when a scan refresh returns nulls (throttle/partial). */
@@ -36,16 +65,7 @@ export function mergeScanResultsPreservingQuotes(
 
     const merged: StockScanResult = {
       ...row,
-      price: mergeNullableNumber(row.price, prev.price),
-      preMarketChange: mergeSessionChange(row.preMarketChange, prev.preMarketChange),
-      regularMarketChange: mergeSessionChange(
-        row.regularMarketChange,
-        prev.regularMarketChange,
-      ),
-      postMarketChange: mergeSessionChange(
-        row.postMarketChange,
-        prev.postMarketChange,
-      ),
+      ...preserveSessionFields(row, prev),
     };
 
     // Keep computed crosses/EMAs when a rescan fails but prior row was good.
@@ -74,8 +94,7 @@ export function applyQuoteUpdates(
     if (!quote) return row;
     return {
       ...row,
-      price: quote.price ?? row.price,
-      // Never wipe scan-cache session % when a quote poll returns null (throttle/error).
+      price: mergeNullableNumber(quote.price, row.price),
       preMarketChange: mergeSessionChange(
         quote.preMarketChange,
         row.preMarketChange,

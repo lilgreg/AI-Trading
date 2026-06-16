@@ -244,10 +244,25 @@ const QUOTES_POLL_MS = 45_000;
 const QUOTES_CHUNK_SIZE = 80;
 const RETRY_FAILED_THRESHOLD = 10;
 const RETRY_POLL_MS = 45_000;
-const TAIL_SYMBOL_START = 120;
+/** Universe index at/after which symbols use staggered chart fetch + deferred retry. */
+const TAIL_SYMBOL_INDEX = 122;
+const TAIL_RETRY_POLL_MS = 60_000;
+const TAIL_RETRY_MAX_ATTEMPTS = 10;
 const NEWS_POLL_MS = Number(process.env.NEXT_PUBLIC_NEWS_POLL_MS ?? 20_000);
 const SCAN_POLL_MS = 30_000;
 const NEWS_POLL_LABEL_SEC = Math.round(NEWS_POLL_MS / 1000);
+
+function isTailRow(row: StockScanResult): boolean {
+  return row.universeIndex != null && row.universeIndex >= TAIL_SYMBOL_INDEX;
+}
+
+function isTailChartError(row: StockScanResult): boolean {
+  return isTailRow(row) && Boolean(row.error);
+}
+
+function countTailChartErrors(results: StockScanResult[] | undefined): number {
+  return results?.filter(isTailChartError).length ?? 0;
+}
 
 function newsHeadlineId(item: NewsHeadline): string {
   return item.url || `${item.symbol}-${item.headline}`;
@@ -333,6 +348,8 @@ export default function HomePage() {
   const [loading, setLoading] = useState(true);
   const [rescanning, setRescanning] = useState(false);
   const [retryingFailed, setRetryingFailed] = useState(false);
+  const [retryingTail, setRetryingTail] = useState(false);
+  const [tailRetryAttempts, setTailRetryAttempts] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [onlyAbove, setOnlyAbove] = useState(false);
   const [sortKey, setSortKey] = useState<SortKey>("cross4h");
@@ -350,6 +367,7 @@ export default function HomePage() {
   );
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const retryPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const tailRetryPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const statusPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const quotesPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const quoteChunkOffsetRef = useRef(0);
@@ -429,8 +447,7 @@ export default function HomePage() {
       setData((prev) => applyScanPayload(json, prev));
 
       const errors = json.results?.filter((r) => r.error).length ?? 0;
-      const tailErrors =
-        json.results?.slice(TAIL_SYMBOL_START).filter((r) => r.error).length ?? 0;
+      const tailErrors = countTailChartErrors(json.results);
       if (errors <= RETRY_FAILED_THRESHOLD && tailErrors === 0) {
         setRetryingFailed(false);
       }
@@ -438,6 +455,33 @@ export default function HomePage() {
       // ignore background retry errors
     } finally {
       if (!options?.quiet) setRetryingFailed(false);
+    }
+  }, [applyScanPayload]);
+
+  const retryTailScan = useCallback(async (options?: { quiet?: boolean }) => {
+    if (!options?.quiet) setRetryingTail(true);
+    try {
+      const res = await fetch("/api/scan/retry-tail", {
+        method: "POST",
+        cache: "no-store",
+      });
+      if (!res.ok) return;
+
+      const json = normalizeCachedResponse(
+        (await res.json()) as Partial<CachedScanResponse> & {
+          tailErrorsRemaining?: number;
+        },
+      );
+      setData((prev) => applyScanPayload(json, prev));
+      setTailRetryAttempts((n) => n + 1);
+
+      if ((json as { tailErrorsRemaining?: number }).tailErrorsRemaining === 0) {
+        setRetryingTail(false);
+      }
+    } catch {
+      // ignore background tail retry errors
+    } finally {
+      if (!options?.quiet) setRetryingTail(false);
     }
   }, [applyScanPayload]);
 
@@ -556,6 +600,50 @@ export default function HomePage() {
     }
   }, [data?.results?.length]);
 
+  const primeTailQuotes = useCallback(async () => {
+    try {
+      const totalSymbols = data?.results?.length ?? 0;
+      if (totalSymbols <= TAIL_SYMBOL_INDEX) return;
+
+      const res = await fetch(
+        `/api/quotes?offset=${TAIL_SYMBOL_INDEX}&limit=${totalSymbols - TAIL_SYMBOL_INDEX}`,
+        { cache: "no-store" },
+      );
+      if (!res.ok) return;
+
+      const body = (await res.json()) as {
+        quotes?: Array<{
+          symbol: string;
+          price: number | null;
+          dailyChange: number | null;
+          preMarketChange: number | null;
+          regularMarketChange: number | null;
+          postMarketChange: number | null;
+        }>;
+      };
+
+      if (!body.quotes?.length) return;
+
+      setQuotesLive(true);
+      setQuoteDailyBySymbol((prev) => {
+        const next = new Map(prev);
+        for (const quote of body.quotes!) {
+          next.set(quote.symbol, quote.dailyChange);
+        }
+        return next;
+      });
+      setData((prev) => {
+        if (!prev?.results?.length) return prev;
+        return {
+          ...prev,
+          results: applyQuoteUpdates(prev.results, body.quotes!),
+        };
+      });
+    } catch {
+      // ignore tail quote priming errors
+    }
+  }, [data?.results?.length]);
+
   useEffect(() => {
     void fetchCache();
   }, [fetchCache]);
@@ -587,6 +675,11 @@ export default function HomePage() {
       if (quotesPollRef.current) clearInterval(quotesPollRef.current);
     };
   }, [data?.cacheEmpty, pollQuotes]);
+
+  useEffect(() => {
+    if (!data || data.cacheEmpty) return;
+    void primeTailQuotes();
+  }, [data?.cacheEmpty, data?.scannedAt, primeTailQuotes]);
 
   useEffect(() => {
     if (newsPollRef.current) clearInterval(newsPollRef.current);
@@ -621,12 +714,17 @@ export default function HomePage() {
   );
 
   const tailErrorCount = useMemo(
-    () => data?.results?.slice(TAIL_SYMBOL_START).filter((r) => r.error).length ?? 0,
+    () => countTailChartErrors(data?.results),
     [data?.results],
   );
 
   const shouldRetryFailed =
-    errorCount > RETRY_FAILED_THRESHOLD || tailErrorCount > 0;
+    (errorCount > RETRY_FAILED_THRESHOLD || tailErrorCount > 0) && tailErrorCount === 0;
+
+  const shouldRetryTail =
+    tailErrorCount > 0 &&
+    tailRetryAttempts < TAIL_RETRY_MAX_ATTEMPTS &&
+    !data?.scanInProgress;
 
   useEffect(() => {
     if (retryPollRef.current) clearInterval(retryPollRef.current);
@@ -646,6 +744,30 @@ export default function HomePage() {
       if (retryPollRef.current) clearInterval(retryPollRef.current);
     };
   }, [data?.cacheEmpty, data?.scanInProgress, shouldRetryFailed, retryFailedScan]);
+
+  useEffect(() => {
+    if (tailRetryPollRef.current) clearInterval(tailRetryPollRef.current);
+    if (!data || data.cacheEmpty || data.scanInProgress) return;
+    if (!shouldRetryTail) {
+      setRetryingTail(false);
+      return;
+    }
+
+    setRetryingTail(true);
+    void retryTailScan({ quiet: true });
+    tailRetryPollRef.current = setInterval(() => {
+      void retryTailScan({ quiet: true });
+    }, TAIL_RETRY_POLL_MS);
+
+    return () => {
+      if (tailRetryPollRef.current) clearInterval(tailRetryPollRef.current);
+    };
+  }, [
+    data?.cacheEmpty,
+    data?.scanInProgress,
+    shouldRetryTail,
+    retryTailScan,
+  ]);
 
   useLayoutEffect(() => {
     const el = newsBarRef.current;
@@ -817,6 +939,17 @@ export default function HomePage() {
         <div className="card mb-6 border-[var(--red)] p-4 text-[var(--red)]">{error}</div>
       )}
 
+      {retryingTail && !data?.scanInProgress && tailErrorCount > 0 && (
+        <div className="card mb-6 border-[var(--accent)] p-4 text-sm text-[var(--accent)]">
+          Refreshing chart data for symbols {TAIL_SYMBOL_INDEX + 1}+… ({tailErrorCount}{" "}
+          remaining
+          {tailRetryAttempts > 0
+            ? ` · attempt ${tailRetryAttempts}/${TAIL_RETRY_MAX_ATTEMPTS}`
+            : ""}
+          )
+        </div>
+      )}
+
       <section className="mb-4 flex flex-wrap gap-3 text-sm">
         <div className="card px-4 py-2">
           <span className="text-[var(--muted)]">Symbols</span>{" "}
@@ -851,13 +984,13 @@ export default function HomePage() {
           {data?.scanInProgress && (
             <span className="ml-2 text-[var(--accent)]">Updating…</span>
           )}
-          {retryingFailed && !data?.scanInProgress && (
+          {retryingTail && !data?.scanInProgress && tailErrorCount > 0 && (
             <span className="ml-2 text-[var(--accent)]">
-              ·{" "}
-              {tailErrorCount > 0
-                ? `Fixing symbols ${TAIL_SYMBOL_START + 1}+… (${tailErrorCount} failed)`
-                : "Retrying failed symbols…"}
+              · Refreshing symbols {TAIL_SYMBOL_INDEX + 1}+…
             </span>
+          )}
+          {retryingFailed && !data?.scanInProgress && !retryingTail && (
+            <span className="ml-2 text-[var(--accent)]">· Retrying failed symbols…</span>
           )}
           {quotesLive && !data?.cacheEmpty && (
             <span className="ml-2 text-[var(--green)]">· Prices updating live</span>

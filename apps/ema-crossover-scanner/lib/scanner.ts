@@ -4,7 +4,7 @@ import {
   latestEmaValues,
   type CrossoverInfo,
 } from "./ema";
-import { fetchHourlyBars } from "./chart-data";
+import { fetchHourlyBars, CHART_TAIL_SYMBOL_INDEX } from "./chart-data";
 import { evaluateAllPatterns, NONE_PATTERNS } from "./patterns";
 import { sleep } from "./request-limit";
 import { resolveLogoUrl } from "./symbol-logo";
@@ -24,9 +24,9 @@ export const SCAN_BATCH_SIZE = 4;
 /** Pause between batches of this many symbols (rate-limit cooldown). */
 export const SCAN_BATCH_GROUP_SIZE = 50;
 export const SCAN_BATCH_GROUP_PAUSE_MS = 8_000;
-/** Extra cooldown after symbol index 120 — Yahoo throttles around here. */
+/** Extra cooldown after symbol index 122 — Yahoo throttles around here. */
 export const SCAN_TAIL_GROUP_PAUSE_MS = 15_000;
-export const SCAN_TAIL_SYMBOL_INDEX = 120;
+export const SCAN_TAIL_SYMBOL_INDEX = CHART_TAIL_SYMBOL_INDEX;
 export const SCAN_BATCH_PAUSE_MS = 1_500;
 export const SCAN_RETRY_COOLDOWN_MS = 10_000;
 export const SCAN_RETRY_BATCH_SIZE = 2;
@@ -99,6 +99,7 @@ export async function scanSymbol(
     tradingViewUrl: tradingViewChartUrl(tvSymbol, "4h"),
     logoUrl: null,
     dataSource: null,
+    universeIndex: symbolIndex,
   };
 
   try {

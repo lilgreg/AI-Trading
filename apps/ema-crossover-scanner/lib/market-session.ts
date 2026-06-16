@@ -59,31 +59,46 @@ export function getUsMarketSession(at: Date = new Date()): UsMarketSession {
   return "closed";
 }
 
+function hasSessionValue(value: number | null | undefined): value is number {
+  return value != null;
+}
+
 /**
  * Hide session segments that have not started today or carry stale prior-day values.
- * During pre-market, Yahoo still returns yesterday's regularMarketChange — drop it.
+ * Pre is always shown when we have data — never hide a populated preMarketChange.
  */
 export function filterSessionChangesForMarket(
   changes: SessionChanges,
   session: UsMarketSession = getUsMarketSession(),
 ): SessionChanges {
+  const pre = hasSessionValue(changes.preMarketChange)
+    ? changes.preMarketChange
+    : null;
+
   switch (session) {
     case "pre":
       return {
-        preMarketChange: changes.preMarketChange,
+        preMarketChange: pre,
         regularMarketChange: null,
         postMarketChange: null,
       };
     case "regular":
       return {
-        preMarketChange: changes.preMarketChange,
+        preMarketChange: pre,
         regularMarketChange: changes.regularMarketChange,
         postMarketChange: null,
       };
     case "afterHours":
-      return changes;
+      return {
+        preMarketChange: pre,
+        regularMarketChange: changes.regularMarketChange,
+        postMarketChange: changes.postMarketChange,
+      };
     case "closed":
-      // Overnight (8pm–4am) / weekend: show completed day's Pre + Reg + AH.
-      return changes;
+      return {
+        preMarketChange: pre,
+        regularMarketChange: changes.regularMarketChange,
+        postMarketChange: changes.postMarketChange,
+      };
   }
 }
