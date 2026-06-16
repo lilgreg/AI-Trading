@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { CHART_TAIL_SYMBOL_INDEX } from "@/lib/chart-data";
-import { loadSnapshot } from "@/lib/scan-cache";
+import { applyQuoteUpdates } from "@/lib/quote-updates";
+import { loadSnapshot, saveSnapshot } from "@/lib/scan-cache";
 import { fetchQuoteUpdates } from "@/lib/quotes";
 
 export const dynamic = "force-dynamic";
@@ -58,6 +59,25 @@ export async function GET(request: NextRequest) {
     .sort((a, b) => (a.universeIndex ?? 0) - (b.universeIndex ?? 0))
     .map((row) => row.symbol);
   const quotes = await fetchQuoteUpdates(symbols, { offset, limit });
+
+  const mergedResults = applyQuoteUpdates(snapshot.results, quotes);
+  const changed = mergedResults.some((row, index) => {
+    const prev = snapshot.results[index];
+    return (
+      row.preMarketChange !== prev.preMarketChange ||
+      row.regularMarketChange !== prev.regularMarketChange ||
+      row.postMarketChange !== prev.postMarketChange ||
+      row.price !== prev.price
+    );
+  });
+
+  if (changed) {
+    void saveSnapshot({
+      ...snapshot,
+      results: mergedResults,
+      lastSavedAt: new Date().toISOString(),
+    });
+  }
 
   return NextResponse.json(
     {

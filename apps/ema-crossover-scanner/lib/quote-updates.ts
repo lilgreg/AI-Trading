@@ -7,6 +7,7 @@ export interface QuoteUpdate {
   preMarketChange: number | null;
   regularMarketChange: number | null;
   postMarketChange: number | null;
+  sessionSnapshotDate?: string | null;
 }
 
 /** Never replace a populated session % with null/undefined from a partial poll. */
@@ -33,7 +34,11 @@ export function preserveSessionFields(
   existing: StockScanResult,
 ): Pick<
   StockScanResult,
-  "preMarketChange" | "regularMarketChange" | "postMarketChange" | "price"
+  | "preMarketChange"
+  | "regularMarketChange"
+  | "postMarketChange"
+  | "price"
+  | "sessionSnapshotDate"
 > {
   return {
     price: mergeNullableNumber(incoming.price, existing.price),
@@ -49,6 +54,8 @@ export function preserveSessionFields(
       incoming.postMarketChange,
       existing.postMarketChange,
     ),
+    sessionSnapshotDate:
+      incoming.sessionSnapshotDate ?? existing.sessionSnapshotDate ?? null,
   };
 }
 
@@ -123,6 +130,8 @@ export function applyQuoteUpdates(
         quote.postMarketChange,
         row.postMarketChange,
       ),
+      sessionSnapshotDate:
+        quote.sessionSnapshotDate ?? row.sessionSnapshotDate ?? null,
     };
   });
 }

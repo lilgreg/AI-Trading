@@ -14,6 +14,7 @@ import {
 } from "./stocks";
 import type { CrossoverDisplay, ParsedSymbol, StockScanResult } from "./types";
 import { EMPTY_CROSSOVER } from "./types";
+import { captureSessionSnapshot, resolveSessionChanges } from "./session-snapshot";
 import { aggregateHourlyTo4h, fetchQuoteMeta } from "./yahoo";
 
 const FAST_EMA = 20;
@@ -104,8 +105,30 @@ export async function scanSymbol(
 
   try {
     const meta = await fetchQuoteMeta(parsed.yahoo);
+    const sessionResolved = await resolveSessionChanges(
+      {
+        symbol: parsed.yahoo,
+        preMarketChange: meta.preMarketChange,
+        regularMarketChange: meta.regularMarketChange,
+        postMarketChange: meta.postMarketChange,
+        sessionSnapshotDate: null,
+      },
+      {
+        preMarketChange: meta.preMarketChange,
+        regularMarketChange: meta.regularMarketChange,
+        postMarketChange: meta.postMarketChange,
+      },
+    );
+    const snapshot = captureSessionSnapshot(sessionResolved);
+    const quoteFields = {
+      ...meta,
+      preMarketChange: sessionResolved.preMarketChange,
+      regularMarketChange: sessionResolved.regularMarketChange,
+      postMarketChange: sessionResolved.postMarketChange,
+      sessionSnapshotDate: snapshot?.sessionSnapshotDate ?? null,
+    };
 
-    const resolvedTvEarly = resolveTradingViewSymbol(parsed, meta.quoteExchange);
+    const resolvedTvEarly = resolveTradingViewSymbol(parsed, quoteFields.quoteExchange);
     base.displayTicker = resolvedTvEarly.includes(":")
       ? resolvedTvEarly.split(":", 2)[1]
       : resolvedTvEarly;
@@ -124,7 +147,7 @@ export async function scanSymbol(
     } catch (chartErr) {
       const message =
         chartErr instanceof Error ? chartErr.message : "Failed to fetch chart data";
-      return { ...base, ...meta, exchange: meta.exchange ?? parsed.exchange, error: message };
+      return { ...base, ...quoteFields, exchange: quoteFields.exchange ?? parsed.exchange, error: message };
     }
 
     const bars4h = aggregateHourlyTo4h(hourly);
@@ -132,13 +155,13 @@ export async function scanSymbol(
       displayTicker: base.displayTicker,
       tradingViewSymbol: base.tradingViewSymbol,
       yahooSymbol: parsed.yahoo,
-      companyName: meta.name,
+      companyName: quoteFields.name,
     });
 
     if (bars4h.length < SLOW_EMA + 5 || hourly.length < SLOW_EMA + 5) {
       return {
         ...base,
-        ...meta,
+        ...quoteFields,
         error: "Insufficient price history for EMA calculation",
       };
     }
@@ -157,12 +180,12 @@ export async function scanSymbol(
       findMostRecentBullishCrossover(bars4h, FAST_EMA, SLOW_EMA),
     );
 
-    const patterns = evaluateAllPatterns(hourly, bars4h, meta.price, includePatternDebug);
+    const patterns = evaluateAllPatterns(hourly, bars4h, quoteFields.price, includePatternDebug);
 
     return {
       ...base,
-      ...meta,
-      exchange: meta.exchange ?? parsed.exchange,
+      ...quoteFields,
+      exchange: quoteFields.exchange ?? parsed.exchange,
       dataSource,
       ema20: emaFast,
       ema50: emaSlow,

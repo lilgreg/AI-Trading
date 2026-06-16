@@ -380,6 +380,7 @@ export default function HomePage() {
     null,
   );
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const healPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const retryPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const tailRetryPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const chartErrorRetryPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -805,9 +806,24 @@ export default function HomePage() {
 
   const unscannedCount = useMemo(
     () =>
-      data?.results?.filter((r) => r.error === "Not scanned yet").length ?? 0,
-    [data?.results],
+      data?.unscannedCount ??
+      data?.results?.filter((r) => r.error === "Not scanned yet").length ??
+      0,
+    [data?.results, data?.unscannedCount],
   );
+
+  useEffect(() => {
+    if (healPollRef.current) clearInterval(healPollRef.current);
+    if (!data || data.cacheEmpty || unscannedCount === 0) return;
+
+    healPollRef.current = setInterval(() => {
+      void fetchCache({ quiet: true, heal: true });
+    }, 60_000);
+
+    return () => {
+      if (healPollRef.current) clearInterval(healPollRef.current);
+    };
+  }, [data?.cacheEmpty, unscannedCount, fetchCache]);
 
   const shouldRetryFailed =
     (errorCount > RETRY_FAILED_THRESHOLD ||
@@ -1021,6 +1037,13 @@ export default function HomePage() {
           Price and session % update live via lightweight quote polling.
         </p>
       </header>
+
+      {unscannedCount > 0 && (
+        <div className="card mb-4 border border-[var(--amber)]/40 bg-[var(--amber)]/10 px-4 py-3 text-sm text-[var(--text)]">
+          Scanning {unscannedCount} remaining symbol{unscannedCount === 1 ? "" : "s"}…
+          Cross and pattern columns fill in as each batch completes.
+        </div>
+      )}
 
       <section className="card mb-6 p-4 sm:p-5">
         <div className="flex flex-wrap items-end justify-between gap-4">

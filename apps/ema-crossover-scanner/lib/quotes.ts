@@ -1,5 +1,6 @@
 import type { QuoteUpdate } from "./quote-updates";
 import { sleep } from "./request-limit";
+import { resolveSessionChanges } from "./session-snapshot";
 import { fetchQuoteMeta } from "./yahoo";
 
 export type { QuoteUpdate } from "./quote-updates";
@@ -29,13 +30,28 @@ export async function fetchQuoteUpdates(
     const batchResults = await Promise.all(
       batch.map(async (symbol) => {
         const meta = await fetchQuoteMeta(symbol);
+        const resolved = await resolveSessionChanges(
+          {
+            symbol,
+            preMarketChange: meta.preMarketChange,
+            regularMarketChange: meta.regularMarketChange,
+            postMarketChange: meta.postMarketChange,
+            sessionSnapshotDate: null,
+          },
+          {
+            preMarketChange: meta.preMarketChange,
+            regularMarketChange: meta.regularMarketChange,
+            postMarketChange: meta.postMarketChange,
+          },
+        );
         return {
           symbol,
           price: meta.price,
           dailyChange: meta.dailyChange,
-          preMarketChange: meta.preMarketChange,
-          regularMarketChange: meta.regularMarketChange,
-          postMarketChange: meta.postMarketChange,
+          preMarketChange: resolved.preMarketChange,
+          regularMarketChange: resolved.regularMarketChange,
+          postMarketChange: resolved.postMarketChange,
+          sessionSnapshotDate: resolved.sessionSnapshotDate ?? null,
         };
       }),
     );

@@ -65,6 +65,7 @@ export function normalizeScanResult(row: LegacyScanRow): StockScanResult {
     preMarketChange: row.preMarketChange ?? null,
     regularMarketChange: row.regularMarketChange ?? null,
     postMarketChange: row.postMarketChange ?? null,
+    sessionSnapshotDate: row.sessionSnapshotDate ?? null,
     patterns: normalizePatterns(row.patterns),
     ema20: row.ema20 ?? null,
     ema50: row.ema50 ?? null,
@@ -106,5 +107,6 @@ export function normalizeCachedResponse(
     scanStartedAt: payload?.scanStartedAt ?? null,
     scanComplete: payload?.scanComplete,
     retryableCount: payload?.retryableCount,
+    unscannedCount: payload?.unscannedCount,
   };
 }

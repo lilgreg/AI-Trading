@@ -70,6 +70,8 @@ export interface StockScanResult {
   regularMarketChange: number | null;
   /** After-hours % change vs regular close (Yahoo quote) */
   postMarketChange: number | null;
+  /** ET date (YYYY-MM-DD) when session % were last captured for overnight display */
+  sessionSnapshotDate?: string | null;
   /** Recent chart patterns on 1h / 4h bars (40-day window) */
   patterns: SymbolPatterns;
   /** 4h 20/50 EMA values (status column reference timeframe) */
@@ -118,6 +120,7 @@ export interface ScanCacheStatus {
 export interface CachedScanResponse extends ScanResponse, ScanCacheStatus {
   scanComplete?: boolean;
   retryableCount?: number;
+  unscannedCount?: number;
 }
 
 export interface ScanSnapshot extends ScanResponse {

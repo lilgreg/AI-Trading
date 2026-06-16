@@ -14,17 +14,21 @@ import {
 import {
   countRetryableResults,
   ensureFreshScan,
+  hasUnscannedRows,
   healCacheOnRead,
   retryFailedSymbols,
   runBackgroundScan,
   scanAndMergeSymbol,
 } from "@/lib/scan-job";
+import { enrichSnapshotSessions } from "@/lib/session-snapshot";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
 const SYNC_RETRY_FAILED_LIMIT = 25;
-const HEAL_MAX_SYMBOLS = 25;
+const HEAL_MAX_SYMBOLS = 20;
+const HEAL_MAX_ROUNDS = 1;
+const SESSION_ENRICH_MAX = 16;
 
 function parseForce(searchParams: URLSearchParams): boolean {
   return searchParams.get("force") === "true";
@@ -112,12 +116,21 @@ export async function GET(request: NextRequest) {
 
   snapshot = await ensureLogoBackfill(snapshot);
 
-  if (heal && snapshot?.results?.length && !status.scanInProgress) {
+  const shouldHeal =
+    snapshot?.results?.length &&
+    (heal || hasUnscannedRows(snapshot.results));
+
+  if (shouldHeal) {
     try {
-      const healed = await healCacheOnRead(snapshot, {}, {
-        maxSymbols: HEAL_MAX_SYMBOLS,
-      });
-      if (healed) snapshot = healed;
+      for (let round = 0; round < HEAL_MAX_ROUNDS; round += 1) {
+        if (!snapshot?.results?.length || !hasUnscannedRows(snapshot.results)) {
+          break;
+        }
+        const healed = await healCacheOnRead(snapshot, {}, {
+          maxSymbols: HEAL_MAX_SYMBOLS,
+        });
+        if (healed) snapshot = healed;
+      }
     } catch {
       // return best-effort snapshot if inline heal fails
     }
@@ -125,11 +138,33 @@ export async function GET(request: NextRequest) {
     queueStaleChartRescans(snapshot);
   }
 
+  if (snapshot?.results?.length) {
+    try {
+      const { results, changed } = await enrichSnapshotSessions(
+        snapshot.results,
+        { maxSymbols: SESSION_ENRICH_MAX },
+      );
+      if (changed) {
+        snapshot = { ...snapshot, results, lastSavedAt: new Date().toISOString() };
+        await saveSnapshot(snapshot);
+      }
+    } catch {
+      // return best-effort snapshot if session enrich fails
+    }
+  }
+
   status = await buildCacheStatus(snapshot);
 
-  return NextResponse.json(toCachedResponse(snapshot, status), {
-    headers: { "Cache-Control": "no-store" },
-  });
+  const unscannedCount = snapshot?.results?.filter(
+    (row) => row.error === "Not scanned yet",
+  ).length ?? 0;
+
+  return NextResponse.json(
+    { ...toCachedResponse(snapshot, status), unscannedCount },
+    {
+      headers: { "Cache-Control": "no-store" },
+    },
+  );
 }
 
 export async function POST(_request: NextRequest) {
