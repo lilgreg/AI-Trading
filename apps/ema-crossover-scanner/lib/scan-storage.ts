@@ -18,10 +18,12 @@ export interface ScanStorage {
 
 const SNAPSHOT_KEY =
   process.env.SCAN_CACHE_OBJECT_KEY ?? "ema-scanner/snapshot.json";
+const META_KEY =
+  process.env.SCAN_META_OBJECT_KEY ?? "ema-scanner/snapshot-meta.json";
 const LOCK_KEY =
   process.env.SCAN_LOCK_OBJECT_KEY ?? "ema-scanner/scan-lock.json";
 
-export { SNAPSHOT_KEY, LOCK_KEY };
+export { SNAPSHOT_KEY, META_KEY, LOCK_KEY };
 
 const LOCAL_CACHE_DIR =
   process.env.SCAN_CACHE_DIR ?? path.join(process.cwd(), ".cache");
@@ -31,6 +33,9 @@ const LOCAL_LOCK_PATH = path.join(LOCAL_CACHE_DIR, "scan-lock.json");
 function localPathForKey(key: string): string {
   if (key === SNAPSHOT_KEY) return LOCAL_SNAPSHOT_PATH;
   if (key === LOCK_KEY) return LOCAL_LOCK_PATH;
+  if (key === META_KEY) {
+    return path.join(LOCAL_CACHE_DIR, "scan-snapshot-meta.json");
+  }
   const basename = key.replace(/\//g, "-");
   return path.join(LOCAL_CACHE_DIR, basename);
 }

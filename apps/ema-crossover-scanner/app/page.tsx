@@ -454,6 +454,16 @@ export default function HomePage() {
         (await res.json()) as Partial<CachedScanResponse> & { message?: string },
       );
       setData((prev) => {
+        if (!json.results?.length && prev?.results?.length) {
+          return {
+            ...prev,
+            scanInProgress: true,
+            stale: json.stale ?? prev.stale,
+            cacheEmpty: json.cacheEmpty ?? prev.cacheEmpty,
+            scanStartedAt: json.scanStartedAt ?? prev.scanStartedAt,
+            lastError: json.lastError ?? prev.lastError,
+          };
+        }
         const next = applyScanPayload(json, prev);
         if (json.message === "Rescan started" && next) {
           return { ...next, scanInProgress: true };
@@ -749,7 +759,7 @@ export default function HomePage() {
   }, [data?.results]);
 
   useEffect(() => {
-    void fetchCache({ heal: true });
+    void fetchCache();
   }, [fetchCache]);
 
   useEffect(() => {

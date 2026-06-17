@@ -6,6 +6,7 @@ import {
   formatStorageError,
   getScanStorage,
   LOCK_KEY,
+  META_KEY,
 } from "./scan-storage";
 import type {
   CachedScanResponse,
@@ -28,21 +29,106 @@ export function getStaleAfterMs(): number {
 
 export function isSnapshotStale(snapshot: ScanSnapshot | null): boolean {
   if (!snapshot) return true;
-  const age = Date.now() - new Date(snapshot.completedAt).getTime();
+  return isCompletedAtStale(snapshot.completedAt);
+}
+
+/** Lightweight snapshot header — avoids parsing full results on status polls. */
+export interface ScanSnapshotMeta {
+  scannedAt: string;
+  completedAt: string;
+  symbolCount: number;
+  scanComplete?: boolean;
+  sources: ScanSnapshot["sources"];
+  tradingViewWatchlistName?: string;
+}
+
+function isCompletedAtStale(completedAt: string): boolean {
+  const age = Date.now() - new Date(completedAt).getTime();
   return age > getStaleAfterMs();
+}
+
+function snapshotToMeta(snapshot: ScanSnapshot): ScanSnapshotMeta {
+  return {
+    scannedAt: snapshot.scannedAt,
+    completedAt: snapshot.completedAt,
+    symbolCount: snapshot.symbolCount,
+    scanComplete: snapshot.scanComplete,
+    sources: snapshot.sources,
+    tradingViewWatchlistName: snapshot.tradingViewWatchlistName,
+  };
+}
+
+export async function loadScanMeta(): Promise<ScanSnapshotMeta | null> {
+  const storage = getScanStorage();
+  const meta = await storage.readJson<ScanSnapshotMeta>(META_KEY);
+  if (meta?.completedAt) return meta;
+
+  const snapshot = await loadSnapshot({ enrich: false });
+  if (!snapshot) return null;
+
+  await saveScanMeta(snapshot);
+  return snapshotToMeta(snapshot);
+}
+
+async function saveScanMeta(snapshot: ScanSnapshot): Promise<void> {
+  await getScanStorage()
+    .writeJson(META_KEY, snapshotToMeta(snapshot))
+    .catch(() => undefined);
+}
+
+export async function buildStatusFromMeta(
+  meta: ScanSnapshotMeta | null,
+): Promise<
+  ScanCacheStatus & {
+    scannedAt: string | null;
+    completedAt: string | null;
+    symbolCount: number;
+  }
+> {
+  const inProgress = await isScanInProgress();
+  const lock = inProgress ? await readScanLock() : null;
+  const staleAfterMinutes = getStaleAfterMs() / 60_000;
+
+  return {
+    scannedAt: meta?.scannedAt ?? null,
+    completedAt: meta?.completedAt ?? null,
+    symbolCount: meta?.symbolCount ?? 0,
+    stale: meta ? isCompletedAtStale(meta.completedAt) : true,
+    scanInProgress: inProgress,
+    cacheEmpty: meta == null,
+    staleAfterMinutes,
+    lastError: getScanError(),
+    scanStartedAt: inProgress
+      ? lock?.startedAt ??
+        (memoryLockUntil > Date.now()
+          ? new Date(memoryLockUntil - LOCK_TTL_MS).toISOString()
+          : null)
+      : null,
+  };
 }
 
 function hasPersistentStorage(): boolean {
   return getScanStorage().isPersistent();
 }
 
-export async function loadSnapshot(): Promise<ScanSnapshot | null> {
-  if (memorySnapshot) return memorySnapshot;
+export async function loadSnapshot(
+  options: { enrich?: boolean } = {},
+): Promise<ScanSnapshot | null> {
+  const shouldEnrich =
+    options.enrich ?? !isCloudflareWorkersRuntime();
+
+  if (memorySnapshot) {
+    if (!shouldEnrich) return memorySnapshot;
+    memorySnapshot = await enrichSnapshot(memorySnapshot);
+    return memorySnapshot;
+  }
 
   const storage = getScanStorage();
   const fromStorage = await storage.getSnapshot();
   if (fromStorage?.results) {
-    memorySnapshot = await enrichSnapshot(fromStorage);
+    memorySnapshot = shouldEnrich
+      ? await enrichSnapshot(fromStorage)
+      : fromStorage;
     return memorySnapshot;
   }
 
@@ -99,6 +185,7 @@ export async function saveSnapshot(snapshot: ScanSnapshot): Promise<void> {
   if (storage.isPersistent()) {
     try {
       await storage.saveSnapshot(snapshot);
+      await saveScanMeta(snapshot);
     } catch (err) {
       const message =
         err instanceof Error ? err.message : "Snapshot write failed";
@@ -109,6 +196,7 @@ export async function saveSnapshot(snapshot: ScanSnapshot): Promise<void> {
 
   try {
     await storage.saveSnapshot(snapshot);
+    await saveScanMeta(snapshot);
   } catch (err) {
     const message =
       err instanceof Error ? err.message : "Local snapshot write failed";
@@ -287,7 +375,7 @@ export function toCachedResponse(
     snapshot.scanComplete !== false &&
     !results.some((row) => row.error === "Not scanned yet");
 
-  return normalizeCachedResponse({
+  const payload = {
     scannedAt: snapshot?.scannedAt ?? new Date(0).toISOString(),
     symbolCount: snapshot?.symbolCount ?? 0,
     results,
@@ -306,5 +394,12 @@ export function toCachedResponse(
       return true;
     }).length,
     ...status,
-  });
+  };
+
+  // Client normalizes rows; skip per-row mapping on Workers to stay under CPU limits.
+  if (isCloudflareWorkersRuntime()) {
+    return payload as CachedScanResponse;
+  }
+
+  return normalizeCachedResponse(payload);
 }

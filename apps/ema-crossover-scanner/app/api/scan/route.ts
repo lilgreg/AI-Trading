@@ -6,6 +6,8 @@ import {
 } from "@/lib/chart-error-sanitize";
 import {
   buildCacheStatus,
+  buildStatusFromMeta,
+  loadScanMeta,
   loadSnapshot,
   recoverStuckScanState,
   saveSnapshot,
@@ -14,13 +16,16 @@ import {
 } from "@/lib/scan-cache";
 import {
   countRetryableResults,
-  ensureFreshScan,
   hasUnscannedRows,
   healCacheOnRead,
   retryFailedSymbols,
   scanAndMergeSymbol,
 } from "@/lib/scan-job";
-import { scheduleScanJob } from "@/lib/scan-scheduler";
+import { isCloudflareWorkersRuntime } from "@/lib/runtime";
+import {
+  scheduleBackgroundTask,
+  scheduleScanJob,
+} from "@/lib/scan-scheduler";
 import { enrichSnapshotSessions } from "@/lib/session-snapshot";
 
 export const dynamic = "force-dynamic";
@@ -68,11 +73,137 @@ function queueStaleChartRescans(snapshot: ScanSnapshot | null): void {
   }
 }
 
+function scheduleDeferredReadMaintenance(
+  snapshot: ScanSnapshot | null,
+  options: { heal?: boolean } = {},
+): void {
+  scheduleBackgroundTask(async () => {
+    let current = snapshot;
+    try {
+      if (
+        current?.results?.length &&
+        countRetryableResults(current.results) > 0 &&
+        !hasUnscannedRows(current.results)
+      ) {
+        const retried = await retryFailedSymbols({}, {
+          maxSymbols: SYNC_RETRY_FAILED_LIMIT,
+        });
+        if (retried) current = retried;
+      }
+
+      current = await ensureLogoBackfill(current);
+
+      const needsHeal =
+        current?.results?.length &&
+        (hasUnscannedRows(current.results) ||
+          current.results.some(rowNeedsChartHeal));
+
+      if (options.heal && needsHeal) {
+        await recoverStuckScanState(current);
+        for (let round = 0; round < HEAL_MAX_ROUNDS; round += 1) {
+          if (!current?.results?.length) break;
+          const stillNeedsHeal =
+            hasUnscannedRows(current.results) ||
+            current.results.some(rowNeedsChartHeal);
+          if (!stillNeedsHeal) break;
+          const healed = await healCacheOnRead(current, {}, {
+            maxSymbols: HEAL_MAX_SYMBOLS,
+          });
+          if (healed) current = healed;
+        }
+      } else if (current) {
+        queueStaleChartRescans(current);
+      }
+
+      if (current?.results?.length) {
+        const { results, changed } = await enrichSnapshotSessions(
+          current.results,
+          { maxSymbols: SESSION_ENRICH_MAX },
+        );
+        if (changed) {
+          current = {
+            ...current,
+            results,
+            lastSavedAt: new Date().toISOString(),
+          };
+          await saveSnapshot(current);
+        }
+      }
+    } catch {
+      // best-effort background maintenance
+    }
+  });
+}
+
+function buildForceScanResponse(
+  snapshot: Pick<ScanSnapshot, "scannedAt" | "symbolCount"> | null,
+  status: Awaited<ReturnType<typeof buildCacheStatus>>,
+  message: string,
+): NextResponse {
+  if (isCloudflareWorkersRuntime()) {
+    return NextResponse.json(
+      {
+        scannedAt: snapshot?.scannedAt ?? null,
+        symbolCount: snapshot?.symbolCount ?? 0,
+        scanInProgress: true,
+        stale: status.stale,
+        cacheEmpty: status.cacheEmpty,
+        staleAfterMinutes: status.staleAfterMinutes,
+        lastError: status.lastError,
+        scanStartedAt: status.scanStartedAt,
+        message,
+      },
+      { status: 202, headers: { "Cache-Control": "no-store" } },
+    );
+  }
+
+  return NextResponse.json(
+    {
+      ...toCachedResponse(snapshot, { ...status, scanInProgress: true }),
+      message,
+    },
+    { status: 202, headers: { "Cache-Control": "no-store" } },
+  );
+}
+
 export async function GET(request: NextRequest) {
   const { searchParams } = request.nextUrl;
   const force = parseForce(searchParams);
   const statusOnly = parseStatusOnly(searchParams);
   const heal = parseHeal(searchParams);
+  const isWorkers = isCloudflareWorkersRuntime();
+
+  if (statusOnly && isWorkers) {
+    await recoverStuckScanState(null);
+    const statusPayload = await buildStatusFromMeta(await loadScanMeta());
+    return NextResponse.json(statusPayload, {
+      headers: { "Cache-Control": "no-store" },
+    });
+  }
+
+  if (force && isWorkers) {
+    await recoverStuckScanState(null);
+    const meta = await loadScanMeta();
+    const statusPayload = await buildStatusFromMeta(meta);
+    const snapshotStub = meta
+      ? { scannedAt: meta.scannedAt, symbolCount: meta.symbolCount }
+      : null;
+
+    if (statusPayload.scanInProgress) {
+      return buildForceScanResponse(
+        snapshotStub,
+        statusPayload,
+        "Scan already in progress",
+      );
+    }
+
+    scheduleScanJob({}, { force: true });
+    return buildForceScanResponse(
+      snapshotStub,
+      { ...statusPayload, scanInProgress: true },
+      "Rescan started",
+    );
+  }
 
   let snapshot = await loadSnapshot();
   await recoverStuckScanState(snapshot);
@@ -87,11 +218,6 @@ export async function GET(request: NextRequest) {
   const needsHeal = hasUnscanned || hasStaleChartRows;
 
   if (statusOnly) {
-    if (status.stale && !status.scanInProgress && !hasUnscanned) {
-      void ensureFreshScan({});
-      status = await buildCacheStatus(snapshot);
-    }
-
     return NextResponse.json({
       scannedAt: snapshot?.scannedAt ?? null,
       completedAt: snapshot?.completedAt ?? null,
@@ -102,28 +228,48 @@ export async function GET(request: NextRequest) {
 
   if (force) {
     if (status.scanInProgress) {
-      return NextResponse.json(
-        {
-          ...toCachedResponse(snapshot, status),
-          message: "Scan already in progress",
-        },
-        { headers: { "Cache-Control": "no-store" } },
+      return buildForceScanResponse(
+        snapshot,
+        status,
+        "Scan already in progress",
       );
     }
 
     scheduleScanJob({}, { force: true });
     status = await buildCacheStatus(snapshot);
+    return buildForceScanResponse(snapshot, status, "Rescan started");
+  }
+
+  if (status.cacheEmpty) {
+    scheduleScanJob({});
+  } else if (status.stale && !hasUnscanned) {
+    scheduleScanJob({});
+  }
+
+  if (isWorkers) {
+    if (heal && needsHeal) {
+      scheduleDeferredReadMaintenance(snapshot, { heal: true });
+    }
+
+    status = await buildCacheStatus(snapshot);
+
+    const unscannedCount = snapshot?.results?.filter(
+      (row) => row.error === "Not scanned yet",
+    ).length ?? 0;
+    const chartRefreshPendingCount = snapshot?.results?.filter(
+      (row) =>
+        row.error === "Chart data refresh pending" ||
+        (row.ema20 == null && row.error != null && rowNeedsChartHeal(row)),
+    ).length ?? 0;
+
     return NextResponse.json(
       {
         ...toCachedResponse(snapshot, status),
-        message: "Rescan started",
+        unscannedCount,
+        chartRefreshPendingCount,
       },
       { headers: { "Cache-Control": "no-store" } },
     );
-  } else if (status.cacheEmpty) {
-    void ensureFreshScan({});
-  } else if (status.stale && !hasUnscanned) {
-    void ensureFreshScan({});
   }
 
   if (
@@ -206,28 +352,44 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(_request: NextRequest) {
+  if (isCloudflareWorkersRuntime()) {
+    await recoverStuckScanState(null);
+    const meta = await loadScanMeta();
+    const statusPayload = await buildStatusFromMeta(meta);
+    const snapshotStub = meta
+      ? { scannedAt: meta.scannedAt, symbolCount: meta.symbolCount }
+      : null;
+
+    if (statusPayload.scanInProgress) {
+      return buildForceScanResponse(
+        snapshotStub,
+        statusPayload,
+        "Scan already in progress",
+      );
+    }
+
+    scheduleScanJob({}, { force: true });
+    return buildForceScanResponse(
+      snapshotStub,
+      { ...statusPayload, scanInProgress: true },
+      "Rescan started",
+    );
+  }
+
   const snapshot = await loadSnapshot();
   await recoverStuckScanState(snapshot);
   let status = await buildCacheStatus(snapshot);
 
   if (status.scanInProgress) {
-    return NextResponse.json({
-      ...toCachedResponse(snapshot, status),
-      message: "Scan already in progress",
-    });
+    return buildForceScanResponse(
+      snapshot,
+      status,
+      "Scan already in progress",
+    );
   }
 
   scheduleScanJob({}, { force: true });
   status = await buildCacheStatus(snapshot);
 
-  return NextResponse.json(
-    {
-      ...toCachedResponse(snapshot, status),
-      message: "Rescan started",
-    },
-    {
-      status: 202,
-      headers: { "Cache-Control": "no-store" },
-    },
-  );
+  return buildForceScanResponse(snapshot, status, "Rescan started");
 }
