@@ -267,6 +267,43 @@ const CHART_ERROR_RETRY_STAGGER_MS = 2_000;
 const NEWS_POLL_MS = Number(process.env.NEXT_PUBLIC_NEWS_POLL_MS ?? 20_000);
 const SCAN_POLL_MS = 30_000;
 const NEWS_POLL_LABEL_SEC = Math.round(NEWS_POLL_MS / 1000);
+const NEWS_FETCH_TIMEOUT_MS = 45_000;
+const NEWS_FETCH_RETRIES = 3;
+const NEWS_FETCH_RETRY_DELAY_MS = 2_000;
+
+async function fetchJsonWithRetry<T>(
+  url: string,
+  options: { timeoutMs?: number; retries?: number; retryDelayMs?: number } = {},
+): Promise<{ ok: boolean; status: number; body: T }> {
+  const timeoutMs = options.timeoutMs ?? NEWS_FETCH_TIMEOUT_MS;
+  const retries = options.retries ?? NEWS_FETCH_RETRIES;
+  const retryDelayMs = options.retryDelayMs ?? NEWS_FETCH_RETRY_DELAY_MS;
+
+  let lastError: unknown;
+  for (let attempt = 0; attempt < retries; attempt += 1) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(url, {
+        cache: "no-store",
+        signal: controller.signal,
+      });
+      const body = (await res.json()) as T;
+      return { ok: res.ok, status: res.status, body };
+    } catch (err) {
+      lastError = err;
+      if (attempt < retries - 1) {
+        await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+      }
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("Failed to fetch news");
+}
 
 function isTailRow(row: StockScanResult): boolean {
   return row.universeIndex != null && row.universeIndex >= TAIL_SYMBOL_INDEX;
@@ -569,25 +606,27 @@ export default function HomePage() {
   const pollNews = useCallback(async (options?: { quiet?: boolean }) => {
     if (!options?.quiet) setNewsLoading(true);
     try {
-      const res = await fetch("/api/news", { cache: "no-store" });
-      if (!res.ok) {
-        const body = (await res.json().catch(() => ({}))) as { error?: string };
-        setNewsError(body.error ?? `News failed (${res.status})`);
+      const { ok, status, body } = await fetchJsonWithRetry<{
+        headlines?: NewsHeadline[];
+        symbolCount?: number;
+        error?: string;
+      }>("/api/news");
+
+      if (!ok) {
+        if (newsHeadlines.length === 0) {
+          setNewsError(body.error ?? `News failed (${status})`);
+        }
+        return;
+      }
+
+      if (body.error && !(body.headlines?.length)) {
+        if (newsHeadlines.length === 0) {
+          setNewsError(body.error);
+        }
         return;
       }
 
       setNewsError(null);
-      const body = (await res.json()) as {
-        headlines?: NewsHeadline[];
-        symbolCount?: number;
-        error?: string;
-      };
-
-      if (body.error && !(body.headlines?.length)) {
-        setNewsError(body.error);
-        return;
-      }
-
       const incoming = body.headlines ?? [];
       const freshIds = incoming
         .map(newsHeadlineId)
@@ -605,11 +644,13 @@ export default function HomePage() {
       setNewsHeadlines(incoming);
       setNewsSymbolCount(body.symbolCount ?? 0);
     } catch (err) {
-      setNewsError(err instanceof Error ? err.message : "Failed to fetch news");
+      if (newsHeadlines.length === 0) {
+        setNewsError(err instanceof Error ? err.message : "Failed to fetch news");
+      }
     } finally {
       if (!options?.quiet) setNewsLoading(false);
     }
-  }, []);
+  }, [newsHeadlines.length]);
 
   const applyQuotePayload = useCallback(
     (
@@ -811,9 +852,8 @@ export default function HomePage() {
 
   useEffect(() => {
     if (newsPollRef.current) clearInterval(newsPollRef.current);
-    if (!data || data.cacheEmpty) return;
 
-    void pollNews({ quiet: true });
+    void pollNews();
     newsPollRef.current = setInterval(() => {
       void pollNews({ quiet: true });
     }, NEWS_POLL_MS);
@@ -821,7 +861,7 @@ export default function HomePage() {
     return () => {
       if (newsPollRef.current) clearInterval(newsPollRef.current);
     };
-  }, [data?.cacheEmpty, pollNews]);
+  }, [pollNews]);
 
   useEffect(() => {
     if (pollRef.current) clearInterval(pollRef.current);

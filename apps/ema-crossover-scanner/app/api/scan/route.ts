@@ -15,10 +15,12 @@ import {
   type ScanSnapshot,
 } from "@/lib/scan-cache";
 import {
+  countCross4hGapRows,
   countRetryableResults,
   hasUnscannedRows,
   healCacheOnRead,
   retryFailedSymbols,
+  rowNeedsCross4hRescan,
   scanAndMergeSymbol,
 } from "@/lib/scan-job";
 import { isCloudflareWorkersRuntime } from "@/lib/runtime";
@@ -26,33 +28,49 @@ import {
   scheduleBackgroundTask,
   scheduleScanJob,
 } from "@/lib/scan-scheduler";
+import { enrichSnapshotSessions } from "@/lib/session-snapshot";
 import { applyQuoteUpdates } from "@/lib/quote-updates";
 import { fetchQuoteUpdates } from "@/lib/quotes";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
-const WORKERS_QUOTE_ENRICH_LIMIT = 20;
+const SYNC_RETRY_FAILED_LIMIT = 25;
+const WORKERS_QUOTE_ENRICH_LIMIT = 24;
 
 async function enrichScanResponseQuotes(
   snapshot: ScanSnapshot | null,
+  options: { persist?: boolean } = {},
 ): Promise<ScanSnapshot | null> {
   if (!snapshot?.results?.length) return snapshot;
 
-  const nullPriceCount = snapshot.results.filter((row) => row.price == null).length;
-  if (nullPriceCount / snapshot.results.length < 0.05) return snapshot;
+  const nullPriceSymbols = snapshot.results
+    .filter((row) => row.price == null && !row.error)
+    .map((row) => row.symbol);
+  if (nullPriceSymbols.length === 0) return snapshot;
 
-  const symbols = snapshot.results.map((row) => row.symbol);
-  const quotes = await fetchQuoteUpdates(symbols, {
+  const quotes = await fetchQuoteUpdates(nullPriceSymbols, {
     offset: 0,
     limit: WORKERS_QUOTE_ENRICH_LIMIT,
   });
   if (!quotes.length) return snapshot;
 
-  return {
-    ...snapshot,
-    results: applyQuoteUpdates(snapshot.results, quotes),
-  };
+  const results = applyQuoteUpdates(snapshot.results, quotes);
+  const updated = { ...snapshot, results };
+
+  if (options.persist) {
+    const changed = results.some(
+      (row, index) => row.price !== snapshot.results[index]?.price,
+    );
+    if (changed) {
+      await saveSnapshot({
+        ...updated,
+        lastSavedAt: new Date().toISOString(),
+      });
+    }
+  }
+
+  return updated;
 }
 const HEAL_MAX_SYMBOLS = 12;
 const HEAL_MAX_ROUNDS = 1;
@@ -65,6 +83,10 @@ function parseForce(searchParams: URLSearchParams): boolean {
 function parseHeal(searchParams: URLSearchParams): boolean {
   const heal = searchParams.get("heal");
   return heal === "1" || heal === "true";
+}
+
+function parseStatusOnly(searchParams: URLSearchParams): boolean {
+  return searchParams.get("status") === "true";
 }
 
 function snapshotLooksCorrupted(snapshot: ScanSnapshot | null): boolean {
@@ -97,6 +119,27 @@ function queueStaleChartRescans(snapshot: ScanSnapshot | null): void {
   for (const symbol of staleSymbols.slice(0, 12)) {
     void scanAndMergeSymbol(symbol).catch(() => undefined);
   }
+}
+
+function scheduleCross4hGapHeal(initialSnapshot: ScanSnapshot | null): void {
+  if (!initialSnapshot?.results?.length) return;
+  if (countCross4hGapRows(initialSnapshot.results) === 0) return;
+
+  scheduleBackgroundTask(async () => {
+    const { sleep } = await import("@/lib/request-limit");
+    for (let round = 0; round < 20; round += 1) {
+      const fresh = await loadSnapshot({ enrich: false });
+      if (!fresh?.results?.length || countCross4hGapRows(fresh.results) === 0) {
+        break;
+      }
+      try {
+        await healCacheOnRead(fresh, {}, { maxSymbols: 4 });
+      } catch {
+        break;
+      }
+      await sleep(2_000);
+    }
+  });
 }
 
 function scheduleDeferredReadMaintenance(
@@ -249,18 +292,27 @@ export async function GET(request: NextRequest) {
       snapshot?.results?.length
         ? snapshot.results.some(rowNeedsChartHeal)
         : false;
-    const needsHeal = hasUnscanned || hasStaleChartRows;
+    const cross4hGapCount = snapshot?.results?.length
+      ? countCross4hGapRows(snapshot.results)
+      : 0;
+    const hasCross4hGaps = cross4hGapCount > 0;
+    const needsHeal = hasUnscanned || hasStaleChartRows || hasCross4hGaps;
 
     const status = await buildStatusFromMeta(meta);
 
-    if (!snapshotLooksCorrupted(responseSnapshot) && (status.cacheEmpty || hasUnscanned)) {
+    if (!snapshotLooksCorrupted(snapshot) && (status.cacheEmpty || hasUnscanned)) {
       scheduleScanJob({});
-    } else if (status.stale && !hasUnscanned && !snapshotLooksCorrupted(responseSnapshot)) {
+    } else if (status.stale && !hasUnscanned && !snapshotLooksCorrupted(snapshot)) {
       scheduleScanJob({});
     }
 
     let responseSnapshot = snapshot;
-    if (snapshot && needsHeal && (heal || hasUnscanned)) {
+    const shouldInlineHeal =
+      snapshot &&
+      (hasUnscanned ||
+        hasStaleChartRows ||
+        (heal && hasCross4hGaps));
+    if (shouldInlineHeal && (heal || hasUnscanned || hasStaleChartRows)) {
       try {
         responseSnapshot =
           (await healCacheOnRead(snapshot, {}, { maxSymbols: 4 })) ?? snapshot;
@@ -268,6 +320,8 @@ export async function GET(request: NextRequest) {
         // return cached snapshot if inline heal fails
       }
     }
+
+    scheduleCross4hGapHeal(responseSnapshot);
 
     if (heal && responseSnapshot?.results?.length && hasUnscannedRows(responseSnapshot.results)) {
       scheduleBackgroundTask(async () => {
@@ -286,7 +340,9 @@ export async function GET(request: NextRequest) {
     }
 
     try {
-      responseSnapshot = await enrichScanResponseQuotes(responseSnapshot);
+      responseSnapshot = await enrichScanResponseQuotes(responseSnapshot, {
+        persist: heal,
+      });
     } catch {
       // best-effort quote enrich for table display
     }
@@ -304,6 +360,10 @@ export async function GET(request: NextRequest) {
               row.error === "Chart data refresh pending" ||
               (row.ema20 == null && row.error != null && rowNeedsChartHeal(row)),
           ).length ?? 0,
+        cross4hGapCount:
+          responseSnapshot?.results?.length
+            ? countCross4hGapRows(responseSnapshot.results)
+            : 0,
       },
       { headers: { "Cache-Control": "no-store" } },
     );

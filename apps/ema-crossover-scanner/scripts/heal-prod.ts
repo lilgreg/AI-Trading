@@ -15,9 +15,22 @@ interface HealCounts {
   chartRefreshPending: number;
   badErrors: number;
   withReg: number;
+  nullPrice: number;
+  cross4hGap: number;
   total: number;
   scanComplete: boolean;
   scanInProgress: boolean;
+}
+
+function countCross4hGaps(
+  results: { ema20Above50?: boolean; cross1h?: { crossoverAt?: string | null; crossoverDate?: string | null }; cross4h?: { crossoverAt?: string | null; crossoverDate?: string | null } }[],
+): number {
+  return results.filter((row) => {
+    if (!row.ema20Above50) return false;
+    const c1 = row.cross1h?.crossoverAt ?? row.cross1h?.crossoverDate;
+    const c4 = row.cross4h?.crossoverAt ?? row.cross4h?.crossoverDate;
+    return Boolean(c1 && !c4);
+  }).length;
 }
 
 async function fetchHealCounts(): Promise<HealCounts> {
@@ -30,7 +43,7 @@ async function fetchHealCounts(): Promise<HealCounts> {
     throw new Error(`Heal request failed (${res.status}): ${text.slice(0, 120)}`);
   }
 
-  const results = (data.results as { error?: string; regularMarketChange?: number | null }[]) ?? [];
+  const results = (data.results as { error?: string; regularMarketChange?: number | null; price?: number | null; ema20Above50?: boolean; cross1h?: { crossoverAt?: string | null; crossoverDate?: string | null }; cross4h?: { crossoverAt?: string | null; crossoverDate?: string | null } }[]) ?? [];
   const unscanned =
     (data.unscannedCount as number) ??
     results.filter((r) => r.error === "Not scanned yet").length;
@@ -39,8 +52,12 @@ async function fetchHealCounts(): Promise<HealCounts> {
     results.filter((r) => r.error === "Chart data refresh pending").length;
   const badErrors = results.filter((r) => r.error && BAD_ERRORS.has(r.error)).length;
   const withReg = results.filter((r) => r.regularMarketChange != null).length;
+  const nullPrice = results.filter((r) => r.price == null).length;
+  const cross4hGap =
+    (data.cross4hGapCount as number) ?? countCross4hGaps(results);
   const total = results.length;
   const regPct = total ? ((withReg / total) * 100).toFixed(1) : "0";
+  const nullPct = total ? ((nullPrice / total) * 100).toFixed(1) : "0";
 
   console.log(
     new Date().toISOString(),
@@ -48,6 +65,10 @@ async function fetchHealCounts(): Promise<HealCounts> {
     total,
     "reg:",
     `${withReg} (${regPct}%)`,
+    "nullPrice:",
+    `${nullPrice} (${nullPct}%)`,
+    "cross4hGap:",
+    cross4hGap,
     "badErrors:",
     badErrors,
     "unscanned:",
@@ -73,6 +94,8 @@ async function fetchHealCounts(): Promise<HealCounts> {
     chartRefreshPending,
     badErrors,
     withReg,
+    nullPrice,
+    cross4hGap,
     total,
     scanComplete: Boolean(data.scanComplete),
     scanInProgress: Boolean(data.scanInProgress),
@@ -81,10 +104,13 @@ async function fetchHealCounts(): Promise<HealCounts> {
 
 function isDone(counts: HealCounts): boolean {
   const regPct = counts.total ? counts.withReg / counts.total : 0;
+  const nullPct = counts.total ? counts.nullPrice / counts.total : 0;
   return (
     counts.unscanned === 0 &&
     counts.chartRefreshPending === 0 &&
     counts.badErrors === 0 &&
+    counts.cross4hGap === 0 &&
+    (counts.nullPrice <= 10 || nullPct < 0.05) &&
     regPct >= 0.98
   );
 }
@@ -104,7 +130,7 @@ async function main() {
 
   const remaining = await fetchHealCounts();
   console.log(
-    `Stopped after ${MAX_ROUNDS} rounds — reg=${remaining.withReg}/${remaining.total}, badErrors=${remaining.badErrors}.`,
+    `Stopped after ${MAX_ROUNDS} rounds — reg=${remaining.withReg}/${remaining.total}, nullPrice=${remaining.nullPrice}, cross4hGap=${remaining.cross4hGap}, badErrors=${remaining.badErrors}.`,
   );
 }
 
