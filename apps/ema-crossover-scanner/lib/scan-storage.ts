@@ -5,6 +5,8 @@ import {
   PutObjectCommand,
   S3Client,
 } from "@aws-sdk/client-s3";
+import { getCloudflareContext } from "@opennextjs/cloudflare";
+import { isCloudflareWorkersRuntime } from "./runtime";
 import type { ScanSnapshot } from "./types";
 
 export interface ScanStorage {
@@ -111,6 +113,52 @@ class LocalScanStorage implements ScanStorage {
   }
 }
 
+/** Native Workers R2 binding — much lower CPU than the S3-compatible API client. */
+class R2BindingScanStorage implements ScanStorage {
+  constructor(private bucket: R2Bucket) {}
+
+  isPersistent(): boolean {
+    return true;
+  }
+
+  async getSnapshot(): Promise<ScanSnapshot | null> {
+    return this.readJson<ScanSnapshot>(SNAPSHOT_KEY);
+  }
+
+  async saveSnapshot(snapshot: ScanSnapshot): Promise<void> {
+    await this.writeJson(SNAPSHOT_KEY, snapshot);
+  }
+
+  async readJson<T>(key: string): Promise<T | null> {
+    try {
+      const object = await this.bucket.get(key);
+      if (!object) return null;
+      return (await object.json()) as T;
+    } catch {
+      return null;
+    }
+  }
+
+  async writeJson(key: string, data: unknown): Promise<void> {
+    await this.bucket.put(key, JSON.stringify(data), {
+      httpMetadata: { contentType: "application/json" },
+    });
+  }
+}
+
+function getR2BindingBucket(): R2Bucket | null {
+  if (!isCloudflareWorkersRuntime()) return null;
+
+  try {
+    const { env } = getCloudflareContext();
+    return (
+      env as CloudflareEnv & { SCAN_CACHE_R2_BUCKET?: R2Bucket }
+    ).SCAN_CACHE_R2_BUCKET ?? null;
+  } catch {
+    return null;
+  }
+}
+
 class R2ScanStorage implements ScanStorage {
   private client: S3Client;
   private bucket: string;
@@ -174,9 +222,14 @@ let storageInstance: ScanStorage | null = null;
 
 export function getScanStorage(): ScanStorage {
   if (!storageInstance) {
-    storageInstance = hasR2Config()
-      ? new R2ScanStorage()
-      : new LocalScanStorage();
+    const bindingBucket = getR2BindingBucket();
+    if (bindingBucket) {
+      storageInstance = new R2BindingScanStorage(bindingBucket);
+    } else if (hasR2Config()) {
+      storageInstance = new R2ScanStorage();
+    } else {
+      storageInstance = new LocalScanStorage();
+    }
   }
   return storageInstance;
 }

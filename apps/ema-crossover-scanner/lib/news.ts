@@ -2,15 +2,15 @@ import YahooFinance from "yahoo-finance2";
 import { dailyChangeForScanRow } from "./daily-change";
 import { formatMsAgo } from "./ema";
 import { normalizeCrossover } from "./normalize-scan-result";
-import { fetchQuoteUpdates } from "./quotes";
 import type { StockScanResult } from "./types";
 
 const yahooFinance = new YahooFinance({ suppressNotices: ["yahooSurvey"] });
 
-const NEWS_TIMEOUT_MS = 12_000;
+const NEWS_TIMEOUT_MS = 8_000;
 const NEWS_PER_SYMBOL = 3;
 const MAX_HEADLINES = 25;
-const SYMBOL_CONCURRENCY = 6;
+const NEWS_MAX_SYMBOLS = 15;
+const SYMBOL_CONCURRENCY = 3;
 
 export interface NewsHeadline {
   symbol: string;
@@ -122,23 +122,18 @@ async function mapWithConcurrency<T, R>(
 /** Fetch recent headlines for EMA-cross symbols via yahoo-finance2 search API. */
 export async function fetchEmaCrossNews(
   results: StockScanResult[],
+  options: { maxSymbols?: number } = {},
 ): Promise<NewsHeadline[]> {
   const qualifying = filterEmaCrossNewsSymbols(results);
   if (qualifying.length === 0) return [];
 
-  const quoteUpdates = await fetchQuoteUpdates(qualifying.map((row) => row.symbol));
-  const dailyBySymbol = new Map(
-    quoteUpdates.map((quote) => [quote.symbol, quote.dailyChange]),
-  );
+  const capped = qualifying.slice(0, options.maxSymbols ?? NEWS_MAX_SYMBOLS);
 
   const raw = await mapWithConcurrency(
-    qualifying,
+    capped,
     SYMBOL_CONCURRENCY,
     (row) =>
-      fetchSymbolNews(
-        row,
-        dailyChangeForRow(row, dailyBySymbol.get(row.symbol)),
-      ),
+      fetchSymbolNews(row, dailyChangeForRow(row)),
   );
 
   const now = Date.now();

@@ -3,6 +3,7 @@
 // Runtime types generated with workerd@1.20260616.1 2026-06-16 global_fetch_strictly_public,nodejs_compat
 interface __BaseEnv_CloudflareEnv {
 	ASSETS: Fetcher;
+	SCAN_CACHE_R2_BUCKET: R2Bucket;
 	BLOB_READ_WRITE_TOKEN: string;
 	R2_ACCOUNT_ID: string;
 	CLOUDFLARE_ACCOUNT_ID: string;

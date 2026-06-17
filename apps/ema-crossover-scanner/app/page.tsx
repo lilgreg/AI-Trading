@@ -378,6 +378,7 @@ export default function HomePage() {
   const [retryingTail, setRetryingTail] = useState(false);
   const [tailRetryAttempts, setTailRetryAttempts] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [newsError, setNewsError] = useState<string | null>(null);
   const [onlyAbove, setOnlyAbove] = useState(false);
   const [sortKey, setSortKey] = useState<SortKey>("cross4h");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
@@ -428,7 +429,7 @@ export default function HomePage() {
       const res = await fetch(`/api/scan${healQuery}`, { cache: "no-store" });
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { error?: string };
-        throw new Error(body.error ?? `Scan failed (${res.status})`);
+        throw new Error(body.error ?? `Scan table failed (${res.status})`);
       }
       const json = normalizeCachedResponse(
         (await res.json()) as Partial<CachedScanResponse>,
@@ -450,9 +451,10 @@ export default function HomePage() {
         const body = (await res.json().catch(() => ({}))) as { error?: string };
         throw new Error(body.error ?? `Rescan failed (${res.status})`);
       }
-      const json = normalizeCachedResponse(
-        (await res.json()) as Partial<CachedScanResponse> & { message?: string },
-      );
+      const raw = (await res.json()) as Partial<CachedScanResponse> & {
+        message?: string;
+      };
+      const json = normalizeCachedResponse(raw);
       setData((prev) => {
         if (!json.results?.length && prev?.results?.length) {
           return {
@@ -465,7 +467,7 @@ export default function HomePage() {
           };
         }
         const next = applyScanPayload(json, prev);
-        if (json.message === "Rescan started" && next) {
+        if (raw.message === "Rescan started" && next) {
           return { ...next, scanInProgress: true };
         }
         return next;
@@ -568,8 +570,13 @@ export default function HomePage() {
     if (!options?.quiet) setNewsLoading(true);
     try {
       const res = await fetch("/api/news", { cache: "no-store" });
-      if (!res.ok) return;
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        setNewsError(body.error ?? `News failed (${res.status})`);
+        return;
+      }
 
+      setNewsError(null);
       const body = (await res.json()) as {
         headlines?: NewsHeadline[];
         symbolCount?: number;
@@ -591,8 +598,8 @@ export default function HomePage() {
 
       setNewsHeadlines(incoming);
       setNewsSymbolCount(body.symbolCount ?? 0);
-    } catch {
-      // ignore background news poll errors
+    } catch (err) {
+      setNewsError(err instanceof Error ? err.message : "Failed to fetch news");
     } finally {
       if (!options?.quiet) setNewsLoading(false);
     }
@@ -1182,7 +1189,9 @@ export default function HomePage() {
             News · Recent EMA crosses (1h/4h)
           </h2>
           <span className="text-xs text-[var(--muted)]">
-            {newsLoading && newsHeadlines.length === 0
+            {newsError
+              ? newsError
+              : newsLoading && newsHeadlines.length === 0
               ? "Loading headlines…"
               : newsSymbolCount > 0
                 ? `${newsSymbolCount} crossed symbols · ${newsHeadlines.length} headlines · refreshes every ~${NEWS_POLL_LABEL_SEC}s`
