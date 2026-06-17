@@ -20,7 +20,6 @@ import {
   hasUnscannedRows,
   healCacheOnRead,
   retryFailedSymbols,
-  rowNeedsCross4hRescan,
   scanAndMergeSymbol,
 } from "@/lib/scan-job";
 import { isCloudflareWorkersRuntime } from "@/lib/runtime";
