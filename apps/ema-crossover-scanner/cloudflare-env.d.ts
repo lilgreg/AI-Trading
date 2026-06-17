@@ -12,12 +12,9 @@ interface __BaseEnv_CloudflareEnv {
 	CLOUDFLARE_SECRET_ACCESS_KEY: string;
 	R2_BUCKET_NAME: string;
 	VERCEL_OIDC_TOKEN: string;
-	WORKER_SELF_REFERENCE: Service<typeof import("./custom-worker").default>;
+	WORKER_SELF_REFERENCE: Fetcher /* ai-trading-scanner */;
 }
 declare namespace Cloudflare {
-	interface GlobalProps {
-		mainModule: typeof import("./custom-worker");
-	}
 	interface Env extends __BaseEnv_CloudflareEnv {}
 }
 interface CloudflareEnv extends __BaseEnv_CloudflareEnv {}
