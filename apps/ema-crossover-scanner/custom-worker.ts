@@ -1,12 +1,12 @@
 import { default as handler } from "./.open-next/worker.js";
 import { runScanChunk } from "./lib/scan-job";
 
-/** Cron chunk schedule — mirrors former vercel.json crons. */
+/** Cron chunk schedule — small slices to stay under Workers subrequest limits. */
 const SCAN_CRON_CHUNKS: Record<string, { offset: number; limit: number }> = {
-  "0 0 * * *": { offset: 0, limit: 80 },
-  "5 0 * * *": { offset: 80, limit: 80 },
-  "10 0 * * *": { offset: 160, limit: 100 },
-  "15 0 * * *": { offset: 260, limit: 100 },
+  "0 0 * * *": { offset: 0, limit: 12 },
+  "5 0 * * *": { offset: 12, limit: 12 },
+  "10 0 * * *": { offset: 24, limit: 12 },
+  "15 0 * * *": { offset: 36, limit: 12 },
 };
 
 export default {

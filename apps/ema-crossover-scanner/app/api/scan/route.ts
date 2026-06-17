@@ -227,30 +227,35 @@ export async function GET(request: NextRequest) {
 
     const status = await buildStatusFromMeta(meta);
 
-    if (status.cacheEmpty) {
+    if (status.cacheEmpty || hasUnscanned) {
       scheduleScanJob({});
-    } else if (status.stale && !hasUnscanned) {
+    } else if (status.stale) {
       scheduleScanJob({});
     }
 
-    if (heal && needsHeal) {
-      scheduleDeferredReadMaintenance(snapshot, { heal: true });
+    let responseSnapshot = snapshot;
+    if (snapshot && needsHeal && (heal || hasUnscanned)) {
+      try {
+        responseSnapshot =
+          (await healCacheOnRead(snapshot, {}, { maxSymbols: 2 })) ?? snapshot;
+      } catch {
+        // return cached snapshot if inline heal fails
+      }
     }
-
-    const unscannedCount = snapshot?.results?.filter(
-      (row) => row.error === "Not scanned yet",
-    ).length ?? 0;
-    const chartRefreshPendingCount = snapshot?.results?.filter(
-      (row) =>
-        row.error === "Chart data refresh pending" ||
-        (row.ema20 == null && row.error != null && rowNeedsChartHeal(row)),
-    ).length ?? 0;
 
     return NextResponse.json(
       {
-        ...toCachedResponse(snapshot, status),
-        unscannedCount,
-        chartRefreshPendingCount,
+        ...toCachedResponse(responseSnapshot, status),
+        unscannedCount:
+          responseSnapshot?.results?.filter(
+            (row) => row.error === "Not scanned yet",
+          ).length ?? 0,
+        chartRefreshPendingCount:
+          responseSnapshot?.results?.filter(
+            (row) =>
+              row.error === "Chart data refresh pending" ||
+              (row.ema20 == null && row.error != null && rowNeedsChartHeal(row)),
+          ).length ?? 0,
       },
       { headers: { "Cache-Control": "no-store" } },
     );

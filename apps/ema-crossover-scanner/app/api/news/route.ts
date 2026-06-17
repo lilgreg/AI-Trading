@@ -37,7 +37,7 @@ export async function GET() {
       err instanceof Error ? err.message : "Failed to fetch news headlines";
     return NextResponse.json(
       { error: message, headlines: [], symbolCount: 0 },
-      { status: 500, headers: { "Cache-Control": "no-store" } },
+      { status: 200, headers: { "Cache-Control": "no-store" } },
     );
   }
 }

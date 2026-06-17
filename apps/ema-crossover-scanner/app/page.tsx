@@ -580,7 +580,13 @@ export default function HomePage() {
       const body = (await res.json()) as {
         headlines?: NewsHeadline[];
         symbolCount?: number;
+        error?: string;
       };
+
+      if (body.error && !(body.headlines?.length)) {
+        setNewsError(body.error);
+        return;
+      }
 
       const incoming = body.headlines ?? [];
       const freshIds = incoming
@@ -766,7 +772,7 @@ export default function HomePage() {
   }, [data?.results]);
 
   useEffect(() => {
-    void fetchCache();
+    void fetchCache({ heal: true });
   }, [fetchCache]);
 
   useEffect(() => {

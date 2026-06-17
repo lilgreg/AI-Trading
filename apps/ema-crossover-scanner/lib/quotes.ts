@@ -1,11 +1,12 @@
 import type { QuoteUpdate } from "./quote-updates";
+import { isCloudflareWorkersRuntime } from "./runtime";
 import { sleep } from "./request-limit";
 import { resolveSessionChanges } from "./session-snapshot";
 import { fetchQuoteMeta } from "./yahoo";
 
 export type { QuoteUpdate } from "./quote-updates";
 
-const QUOTE_BATCH_SIZE = 12;
+const QUOTE_BATCH_SIZE = isCloudflareWorkersRuntime() ? 4 : 12;
 const QUOTE_BATCH_PAUSE_MS = 400;
 
 /** Lightweight Yahoo quote fetch — price and session % only (no EMA/pattern rescan). */

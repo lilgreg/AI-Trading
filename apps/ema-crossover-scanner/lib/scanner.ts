@@ -1,9 +1,11 @@
 import {
+  findEarliestBullishAbove,
   findMostRecentBullishCrossover,
   formatCrossoverDateTime,
   latestEmaValues,
   type CrossoverInfo,
 } from "./ema";
+import { isCloudflareWorkersRuntime } from "./runtime";
 import { fetchHourlyBars, CHART_TAIL_SYMBOL_INDEX } from "./chart-data";
 import { evaluateAllPatterns, NONE_PATTERNS } from "./patterns";
 import { sleep } from "./request-limit";
@@ -24,6 +26,9 @@ const SLOW_EMA = 50;
 const MIN_HOURLY_BARS = SLOW_EMA + 5;
 
 function historyDayFallbacks(baseDays: number): number[] {
+  if (isCloudflareWorkersRuntime()) {
+    return [...new Set([baseDays, Math.max(baseDays, 180)])].sort((a, b) => a - b);
+  }
   return [...new Set([baseDays, 90, 120, 180, 270, 365])].sort((a, b) => a - b);
 }
 
@@ -50,7 +55,7 @@ async function fetchHourlyBarsWithFallback(
 }
 
 /** Parallel symbol scans per batch — kept low to avoid Yahoo throttling. */
-export const SCAN_BATCH_SIZE = 4;
+export const SCAN_BATCH_SIZE = isCloudflareWorkersRuntime() ? 1 : 4;
 /** Pause between batches of this many symbols (rate-limit cooldown). */
 export const SCAN_BATCH_GROUP_SIZE = 50;
 export const SCAN_BATCH_GROUP_PAUSE_MS = 8_000;
@@ -204,9 +209,12 @@ export async function scanSymbol(
     const cross1h = buildCrossoverDisplay(
       findMostRecentBullishCrossover(hourly, FAST_EMA, SLOW_EMA),
     );
-    const cross4h = buildCrossoverDisplay(
-      findMostRecentBullishCrossover(bars4h, FAST_EMA, SLOW_EMA),
-    );
+    const cross4hRaw =
+      findMostRecentBullishCrossover(bars4h, FAST_EMA, SLOW_EMA) ??
+      (fastAboveSlow
+        ? findEarliestBullishAbove(bars4h, FAST_EMA, SLOW_EMA)
+        : null);
+    const cross4h = buildCrossoverDisplay(cross4hRaw);
 
     const patterns = evaluateAllPatterns(hourly, bars4h, quoteFields.price, includePatternDebug);
 

@@ -13,6 +13,7 @@ import {
   fetchTwelveDataHourlyBars,
   isTwelveDataConfigured,
 } from "./twelve-data";
+import { isCloudflareWorkersRuntime } from "./runtime";
 import { sleep, yahooLimiter } from "./request-limit";
 import { resolveYahooChartSymbol } from "./stocks";
 import {
@@ -120,10 +121,15 @@ function configuredBackupProviders(): ChartProvider[] {
 
 function allProviders(options: FetchHourlyBarsOptions = {}): ChartProvider[] {
   const yahoo = yahooProviders();
+  const finnhub = configuredBackupProviders().filter((p) => p.name === "finnhub");
+
+  // Workers: one Yahoo endpoint + Finnhub — avoid 50 subrequest limit per invocation.
+  if (isCloudflareWorkersRuntime()) {
+    return [...yahoo.slice(0, 1), ...finnhub];
+  }
 
   // Tail symbols: Yahoo v8 → spark → v8-range, then Finnhub only.
   if (isTailSymbol(options)) {
-    const finnhub = configuredBackupProviders().filter((p) => p.name === "finnhub");
     return [...yahoo, ...finnhub];
   }
 

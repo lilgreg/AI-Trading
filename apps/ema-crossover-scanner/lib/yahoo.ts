@@ -521,15 +521,29 @@ function quotePrices(quote: Record<string, unknown>): DailyChangeQuotePrices {
   };
 }
 
+function bestAvailablePrice(prices: DailyChangeQuotePrices): number | null {
+  return (
+    prices.regularMarketPrice ??
+    prices.preMarketPrice ??
+    prices.postMarketPrice ??
+    null
+  );
+}
+
 function sessionAwarePrice(prices: DailyChangeQuotePrices): number | null {
   const session = getUsMarketSession();
   switch (session) {
     case "pre":
-      return prices.preMarketPrice ?? null;
+      return prices.preMarketPrice ?? prices.regularMarketPrice ?? bestAvailablePrice(prices);
     case "regular":
-      return prices.regularMarketPrice ?? null;
+      return prices.regularMarketPrice ?? prices.preMarketPrice ?? bestAvailablePrice(prices);
     case "afterHours":
-      return prices.postMarketPrice ?? prices.regularMarketPrice ?? null;
+      return (
+        prices.postMarketPrice ??
+        prices.regularMarketPrice ??
+        prices.preMarketPrice ??
+        null
+      );
     case "closed":
       return (
         prices.postMarketPrice ??
