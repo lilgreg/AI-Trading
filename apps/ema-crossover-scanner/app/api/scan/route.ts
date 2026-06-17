@@ -67,8 +67,12 @@ function parseHeal(searchParams: URLSearchParams): boolean {
   return heal === "1" || heal === "true";
 }
 
-function parseStatusOnly(searchParams: URLSearchParams): boolean {
-  return searchParams.get("status") === "true";
+function snapshotLooksCorrupted(snapshot: ScanSnapshot | null): boolean {
+  if (!snapshot?.results?.length) return false;
+  const notScanned = snapshot.results.filter(
+    (row) => row.error === "Not scanned yet",
+  ).length;
+  return notScanned / snapshot.results.length > 0.2;
 }
 
 async function ensureLogoBackfill(
@@ -249,9 +253,9 @@ export async function GET(request: NextRequest) {
 
     const status = await buildStatusFromMeta(meta);
 
-    if (status.cacheEmpty || hasUnscanned) {
+    if (!snapshotLooksCorrupted(responseSnapshot) && (status.cacheEmpty || hasUnscanned)) {
       scheduleScanJob({});
-    } else if (status.stale) {
+    } else if (status.stale && !hasUnscanned && !snapshotLooksCorrupted(responseSnapshot)) {
       scheduleScanJob({});
     }
 
