@@ -27,6 +27,7 @@ import {
   noteWorkerRateLimit,
 } from "@/lib/client-poll";
 import { createPollCoordinator } from "@/lib/poll-coordinator";
+import { getPollIntervals } from "@/lib/poll-intervals";
 import type {
   CachedScanResponse,
   CrossoverDisplay,
@@ -261,8 +262,6 @@ function sortIndicator(active: boolean, dir: SortDir): string {
   return dir === "asc" ? " ↑" : " ↓";
 }
 
-const STATUS_POLL_MS = 180_000;
-const QUOTES_POLL_MS = 180_000;
 const QUOTES_CHUNK_SIZE = 200;
 const RETRY_FAILED_THRESHOLD = 10;
 const RETRY_POLL_MS = 180_000;
@@ -273,14 +272,12 @@ const TAIL_RETRY_MAX_ATTEMPTS = 10;
 const CHART_ERROR_RETRY_MS = 180_000;
 const CHART_ERROR_RETRY_STAGGER_MS = 5_000;
 const CHART_ERROR_MAX_PER_CYCLE = 2;
-const NEWS_POLL_MS = Number(process.env.NEXT_PUBLIC_NEWS_POLL_MS ?? 300_000);
 const SCAN_POLL_MS = 60_000;
 const HEAL_POLL_MS = 300_000;
 const COORDINATOR_TICK_MS = 20_000;
 const INITIAL_NEWS_DELAY_MS = 20_000;
 const INITIAL_QUOTES_DELAY_MS = 15_000;
 const INITIAL_HEAL_DELAY_MS = 60_000;
-const NEWS_POLL_LABEL_SEC = Math.round(NEWS_POLL_MS / 1000);
 const NEWS_FETCH_TIMEOUT_MS = 45_000;
 const NEWS_FETCH_RETRIES = 3;
 const NEWS_FETCH_RETRY_DELAY_MS = 2_000;
@@ -448,6 +445,9 @@ export default function HomePage() {
   const [newsHeadlines, setNewsHeadlines] = useState<NewsHeadline[]>([]);
   const [newsSymbolCount, setNewsSymbolCount] = useState(0);
   const [newsLoading, setNewsLoading] = useState(false);
+  const [newsPollLabelSec, setNewsPollLabelSec] = useState(() =>
+    Math.round(getPollIntervals().newsMs / 1000),
+  );
   const [glowingNewsIds, setGlowingNewsIds] = useState<Set<string>>(() => new Set());
   const [selectedNewsArticle, setSelectedNewsArticle] = useState<NewsHeadline | null>(
     null,
@@ -879,6 +879,15 @@ export default function HomePage() {
   }, []);
 
   useEffect(() => {
+    const syncPollLabel = () => {
+      setNewsPollLabelSec(Math.round(getPollIntervals().newsMs / 1000));
+    };
+    syncPollLabel();
+    const id = setInterval(syncPollLabel, 60_000);
+    return () => clearInterval(id);
+  }, []);
+
+  useEffect(() => {
     const tick = () => {
       setRateLimitMsg(isWorkerRateLimited() ? formatRateLimitError() : null);
     };
@@ -901,19 +910,19 @@ export default function HomePage() {
     });
     coordinator.register({
       name: "status",
-      intervalMs: STATUS_POLL_MS,
+      intervalMs: () => getPollIntervals().statusMs,
       enabled: () => Boolean(data),
       run: () => pollScanStatus(),
     });
     coordinator.register({
       name: "quotes",
-      intervalMs: QUOTES_POLL_MS,
+      intervalMs: () => getPollIntervals().quotesMs,
       enabled: () => Boolean(data && !data.cacheEmpty),
       run: () => pollQuotes(),
     });
     coordinator.register({
       name: "news",
-      intervalMs: NEWS_POLL_MS,
+      intervalMs: () => getPollIntervals().newsMs,
       run: () => pollNews({ quiet: true }),
     });
     coordinator.register({
@@ -1319,7 +1328,7 @@ export default function HomePage() {
               : newsLoading && newsHeadlines.length === 0
               ? "Loading headlines…"
               : newsSymbolCount > 0
-                ? `${newsSymbolCount} crossed symbols · ${newsHeadlines.length} headlines · refreshes every ~${NEWS_POLL_LABEL_SEC}s`
+                ? `${newsSymbolCount} crossed symbols · ${newsHeadlines.length} headlines · refreshes every ~${newsPollLabelSec}s`
                 : "No qualifying crosses yet"}
           </span>
         </div>

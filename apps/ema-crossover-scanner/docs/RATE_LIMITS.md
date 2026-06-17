@@ -20,22 +20,37 @@ Common causes: multiple browser tabs, aggressive client polling, background heal
 | `app/api/scan/route.ts` | No auto-heal unless `?heal=1`; no stale/full scan on GET (cron + `?force=true` only); `Cache-Control: private, max-age=45` on read-only GET |
 | `lib/scan-scheduler.ts` | Dedupes stacked `scheduleScanJob` calls |
 | `lib/client-poll.ts` | Exponential backoff; persists rate-limit expiry in `localStorage` |
-| `app/page.tsx` | Page Visibility pauses polling; single poll coordinator (one task per tick); 3–5 min intervals |
-| `lib/yahoo-cache.ts` | 15 min R2 cache on all Yahoo quote/chart paths |
+| `app/page.tsx` | Page Visibility pauses polling; single poll coordinator; session-aware intervals (see below) |
+| `lib/poll-intervals.ts` | Faster polls 9:30–16:00 ET; slower pre/after/closed |
+| `lib/yahoo-cache.ts` | Per-kind R2 TTL: quotes/news ~2 min; charts 15 min |
+
+## Session-aware client polling
+
+| Data | Regular session (9:30–16:00 ET) | Pre / after / closed |
+|------|----------------------------------|----------------------|
+| Quotes | 90s poll, 2 min cache | 3 min poll, 2 min cache |
+| News | 2 min poll, 2 min cache | 5 min poll, 2 min cache |
+| Charts / crosses | 15 min cache (unchanged) | 15 min cache |
+
+Env vars (wrangler `[vars]` / `next.config.ts`):
+
+- `YAHOO_QUOTE_CACHE_TTL_MS`, `YAHOO_NEWS_CACHE_TTL_MS`, `YAHOO_CHART_CACHE_TTL_MS`
+- `NEXT_PUBLIC_QUOTES_POLL_MS_MARKET`, `NEXT_PUBLIC_QUOTES_POLL_MS_OFF`
+- `NEXT_PUBLIC_NEWS_POLL_MS_MARKET`, `NEXT_PUBLIC_NEWS_POLL_MS_OFF`
 
 ## Expected request budget (one tab, foreground)
 
-Approximate **per hour** with one tab visible:
+Approximate **per hour** with one tab visible during **regular session**:
 
 | Endpoint | Interval | ~req/hr |
 |----------|----------|---------|
 | `/api/scan` (read) | coordinator ~3 min effective | ~20 |
 | `/api/scan?status=true` | 3 min | ~20 |
-| `/api/quotes` | 3 min (chunked) | ~20 |
-| `/api/news` | 5 min | ~12 |
+| `/api/quotes` | 90s (chunked) | ~40 |
+| `/api/news` | 2 min | ~30 |
 | Heal (`?heal=1`) | 5 min when needed | ~0–12 |
 
-**~70–90 Worker requests/hour/tab** → **~1,700–2,200/day** for a single tab left open. Well under 100k if you use **one tab**.
+**~110–120 Worker requests/hour/tab** during market hours → **~2,400–2,900/day** for a single tab left open on a weekday. Off-hours polling is slower (3 min quotes, 5 min news). Well under 100k if you use **one tab**.
 
 ## What you should do
 

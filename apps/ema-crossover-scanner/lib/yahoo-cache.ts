@@ -17,10 +17,32 @@ interface CacheEnvelope<T = unknown> {
 /** Per-isolate hot cache — avoids R2 read on repeat hits within one invocation. */
 const memory = new Map<string, CacheEnvelope>();
 
-export function getYahooCacheTtlMs(): number {
-  const ms = Number(process.env.YAHOO_CACHE_TTL_MS ?? 900_000);
-  if (!Number.isFinite(ms) || ms < 60_000) return 900_000;
+const QUOTE_KINDS = new Set<YahooCacheKind>(["quote", "quote-v8"]);
+const NEWS_KINDS = new Set<YahooCacheKind>(["news"]);
+
+function parseTtlMs(raw: string | undefined, fallback: number): number {
+  const ms = Number(raw ?? fallback);
+  if (!Number.isFinite(ms) || ms < 60_000) return fallback;
   return ms;
+}
+
+export function getYahooCacheTtlMsForKind(kind: YahooCacheKind): number {
+  if (QUOTE_KINDS.has(kind)) {
+    return parseTtlMs(process.env.YAHOO_QUOTE_CACHE_TTL_MS, 120_000);
+  }
+  if (NEWS_KINDS.has(kind)) {
+    return parseTtlMs(process.env.YAHOO_NEWS_CACHE_TTL_MS, 120_000);
+  }
+  const legacy = process.env.YAHOO_CACHE_TTL_MS;
+  return parseTtlMs(
+    process.env.YAHOO_CHART_CACHE_TTL_MS ?? legacy,
+    900_000,
+  );
+}
+
+/** @deprecated Use getYahooCacheTtlMsForKind — chart TTL for legacy callers. */
+export function getYahooCacheTtlMs(): number {
+  return getYahooCacheTtlMsForKind("chart-v8");
 }
 
 function storageKey(kind: YahooCacheKind, id: string): string {
@@ -28,8 +50,8 @@ function storageKey(kind: YahooCacheKind, id: string): string {
   return `ema-scanner/yahoo-cache/${kind}/${safe}.json`;
 }
 
-function isFresh(entry: CacheEnvelope): boolean {
-  return Date.now() - entry.fetchedAt < getYahooCacheTtlMs();
+function isFresh(entry: CacheEnvelope, kind: YahooCacheKind): boolean {
+  return Date.now() - entry.fetchedAt < getYahooCacheTtlMsForKind(kind);
 }
 
 export async function getYahooCached<T>(
@@ -38,11 +60,11 @@ export async function getYahooCached<T>(
 ): Promise<T | null> {
   const key = storageKey(kind, id);
   const mem = memory.get(key);
-  if (mem && isFresh(mem)) return mem.data as T;
+  if (mem && isFresh(mem, kind)) return mem.data as T;
 
   try {
     const fromStore = await getScanStorage().readJson<CacheEnvelope<T>>(key);
-    if (fromStore && isFresh(fromStore)) {
+    if (fromStore && isFresh(fromStore, kind)) {
       memory.set(key, fromStore);
       return fromStore.data;
     }

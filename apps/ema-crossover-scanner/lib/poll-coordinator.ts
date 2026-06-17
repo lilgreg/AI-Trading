@@ -1,10 +1,16 @@
 /** Single tick dispatches at most one poll task — avoids parallel client intervals. */
 
+export type PollInterval = number | (() => number);
+
 export interface PollSlot {
   name: string;
-  intervalMs: number;
+  intervalMs: PollInterval;
   run: () => void | Promise<void>;
   enabled?: () => boolean;
+}
+
+function resolveInterval(interval: PollInterval): number {
+  return typeof interval === "function" ? interval() : interval;
 }
 
 export function createPollCoordinator(options: {
@@ -29,7 +35,7 @@ export function createPollCoordinator(options: {
       const idx = (cursor + i) % slots.length;
       const slot = slots[idx];
       if (slot.enabled && !slot.enabled()) continue;
-      if (now - slot.lastRun < slot.intervalMs) continue;
+      if (now - slot.lastRun < resolveInterval(slot.intervalMs)) continue;
       slot.lastRun = now;
       cursor = (idx + 1) % slots.length;
       await slot.run();
