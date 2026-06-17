@@ -237,10 +237,26 @@ export async function GET(request: NextRequest) {
     if (snapshot && needsHeal && (heal || hasUnscanned)) {
       try {
         responseSnapshot =
-          (await healCacheOnRead(snapshot, {}, { maxSymbols: 2 })) ?? snapshot;
+          (await healCacheOnRead(snapshot, {}, { maxSymbols: 4 })) ?? snapshot;
       } catch {
         // return cached snapshot if inline heal fails
       }
+    }
+
+    if (responseSnapshot?.results?.length && hasUnscannedRows(responseSnapshot.results)) {
+      scheduleBackgroundTask(async () => {
+        const { sleep } = await import("@/lib/request-limit");
+        for (let round = 0; round < 8; round += 1) {
+          const fresh = await loadSnapshot({ enrich: false });
+          if (!fresh?.results?.length || !hasUnscannedRows(fresh.results)) break;
+          try {
+            await healCacheOnRead(fresh, {}, { maxSymbols: 4 });
+          } catch {
+            break;
+          }
+          await sleep(2_000);
+        }
+      });
     }
 
     return NextResponse.json(

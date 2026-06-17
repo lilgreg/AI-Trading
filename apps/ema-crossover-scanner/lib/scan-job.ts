@@ -461,7 +461,7 @@ function mergeScanResultPreservingQuotes(
   return incoming;
 }
 
-const HEAL_MAX_PER_REQUEST = isCloudflareWorkersRuntime() ? 2 : 12;
+const HEAL_MAX_PER_REQUEST = isCloudflareWorkersRuntime() ? 4 : 12;
 const HEAL_RESCAN_DELAY_MS = 800;
 const HEAL_LOCK_RETRY_MS = 2_000;
 const HEAL_LOCK_RETRIES = 3;
