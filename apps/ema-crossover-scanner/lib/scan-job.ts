@@ -466,6 +466,14 @@ const HEAL_RESCAN_DELAY_MS = 800;
 const HEAL_LOCK_RETRY_MS = 2_000;
 const HEAL_LOCK_RETRIES = 3;
 
+function rowNeedsCross4hRescan(row: StockScanResult): boolean {
+  if (row.error) return false;
+  if (!row.ema20Above50) return false;
+  const cross1h = row.cross1h?.crossoverAt ?? row.cross1h?.crossoverDate;
+  const cross4h = row.cross4h?.crossoverAt ?? row.cross4h?.crossoverDate;
+  return Boolean(cross1h && !cross4h);
+}
+
 function pickRowsToHeal(
   snapshot: ScanSnapshot,
   maxSymbols: number,
@@ -476,12 +484,15 @@ function pickRowsToHeal(
   const staleChartRows = snapshot.results.filter(
     (row) => row.error !== "Not scanned yet" && rowNeedsChartHeal(row),
   );
+  const cross4hGapRows = snapshot.results.filter(rowNeedsCross4hRescan);
   const unscannedBatch = unscannedRows.slice(0, maxSymbols);
-  const staleBatch = staleChartRows.slice(
+  const remaining = Math.max(0, maxSymbols - unscannedBatch.length);
+  const staleBatch = staleChartRows.slice(0, remaining);
+  const cross4hBatch = cross4hGapRows.slice(
     0,
-    Math.max(0, maxSymbols - unscannedBatch.length),
+    Math.max(0, maxSymbols - unscannedBatch.length - staleBatch.length),
   );
-  return [...unscannedBatch, ...staleBatch];
+  return [...unscannedBatch, ...staleBatch, ...cross4hBatch];
 }
 
 async function mergeRowIntoFreshSnapshot(
