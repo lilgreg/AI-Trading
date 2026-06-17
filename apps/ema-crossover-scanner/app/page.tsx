@@ -19,6 +19,12 @@ import { StockLogo } from "@/components/stock-logo";
 import { NewsArticleModal } from "@/components/news-article-modal";
 import type { NewsHeadline } from "@/lib/news";
 import { prefetchNewsPreview } from "@/lib/news-preview-cache";
+import {
+  clientFetch,
+  formatRateLimitError,
+  isWorkerRateLimited,
+  noteWorkerRateLimit,
+} from "@/lib/client-poll";
 import type {
   CachedScanResponse,
   CrossoverDisplay,
@@ -253,19 +259,24 @@ function sortIndicator(active: boolean, dir: SortDir): string {
   return dir === "asc" ? " ↑" : " ↓";
 }
 
-const STATUS_POLL_MS = 60_000;
-const QUOTES_POLL_MS = 45_000;
+const STATUS_POLL_MS = 120_000;
+const QUOTES_POLL_MS = 120_000;
 const QUOTES_CHUNK_SIZE = 80;
 const RETRY_FAILED_THRESHOLD = 10;
-const RETRY_POLL_MS = 45_000;
+const RETRY_POLL_MS = 120_000;
 /** Universe index at/after which symbols use staggered chart fetch + deferred retry. */
 const TAIL_SYMBOL_INDEX = 122;
-const TAIL_RETRY_POLL_MS = 60_000;
+const TAIL_RETRY_POLL_MS = 120_000;
 const TAIL_RETRY_MAX_ATTEMPTS = 10;
-const CHART_ERROR_RETRY_MS = 3_000;
-const CHART_ERROR_RETRY_STAGGER_MS = 2_000;
-const NEWS_POLL_MS = Number(process.env.NEXT_PUBLIC_NEWS_POLL_MS ?? 20_000);
-const SCAN_POLL_MS = 30_000;
+const CHART_ERROR_RETRY_MS = 120_000;
+const CHART_ERROR_RETRY_STAGGER_MS = 5_000;
+const CHART_ERROR_MAX_PER_CYCLE = 2;
+const NEWS_POLL_MS = Number(process.env.NEXT_PUBLIC_NEWS_POLL_MS ?? 120_000);
+const SCAN_POLL_MS = 60_000;
+const HEAL_POLL_MS = 300_000;
+const INITIAL_NEWS_DELAY_MS = 15_000;
+const INITIAL_QUOTES_DELAY_MS = 10_000;
+const INITIAL_HEAL_DELAY_MS = 45_000;
 const NEWS_POLL_LABEL_SEC = Math.round(NEWS_POLL_MS / 1000);
 const NEWS_FETCH_TIMEOUT_MS = 45_000;
 const NEWS_FETCH_RETRIES = 3;
@@ -274,20 +285,27 @@ const NEWS_FETCH_RETRY_DELAY_MS = 2_000;
 async function fetchJsonWithRetry<T>(
   url: string,
   options: { timeoutMs?: number; retries?: number; retryDelayMs?: number } = {},
-): Promise<{ ok: boolean; status: number; body: T }> {
+): Promise<{ ok: boolean; status: number; body: T; rateLimited?: boolean }> {
   const timeoutMs = options.timeoutMs ?? NEWS_FETCH_TIMEOUT_MS;
   const retries = options.retries ?? NEWS_FETCH_RETRIES;
   const retryDelayMs = options.retryDelayMs ?? NEWS_FETCH_RETRY_DELAY_MS;
+
+  if (isWorkerRateLimited()) {
+    return { ok: false, status: 429, body: {} as T, rateLimited: true };
+  }
 
   let lastError: unknown;
   for (let attempt = 0; attempt < retries; attempt += 1) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const res = await fetch(url, {
+      const res = await clientFetch(url, {
         cache: "no-store",
         signal: controller.signal,
       });
+      if (!res) {
+        return { ok: false, status: 429, body: {} as T, rateLimited: true };
+      }
       const body = (await res.json()) as T;
       return { ok: res.ok, status: res.status, body };
     } catch (err) {
@@ -415,6 +433,7 @@ export default function HomePage() {
   const [retryingTail, setRetryingTail] = useState(false);
   const [tailRetryAttempts, setTailRetryAttempts] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [rateLimitMsg, setRateLimitMsg] = useState<string | null>(null);
   const [newsError, setNewsError] = useState<string | null>(null);
   const [onlyAbove, setOnlyAbove] = useState(false);
   const [sortKey, setSortKey] = useState<SortKey>("cross4h");
@@ -458,14 +477,41 @@ export default function HomePage() {
   );
 
   const fetchCache = useCallback(async (options?: { quiet?: boolean; heal?: boolean }) => {
+    if (isWorkerRateLimited()) {
+      const msg = formatRateLimitError();
+      setRateLimitMsg(msg);
+      if (!options?.quiet) setError(msg);
+      return;
+    }
+
     if (!options?.quiet) setLoading(true);
     setError(null);
+    setRateLimitMsg(null);
 
     try {
       const healQuery = options?.heal === true ? "?heal=1" : "";
-      const res = await fetch(`/api/scan${healQuery}`, { cache: "no-store" });
+      const res = await clientFetch(`/api/scan${healQuery}`, { cache: "no-store" });
+      if (!res) {
+        const msg = formatRateLimitError();
+        setRateLimitMsg(msg);
+        if (!options?.quiet) setError(msg);
+        return;
+      }
       if (!res.ok) {
-        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        const text = await res.text().catch(() => "");
+        noteWorkerRateLimit(res.status, text);
+        if (res.status === 429 || text.includes("1027")) {
+          const msg = formatRateLimitError();
+          setRateLimitMsg(msg);
+          if (!options?.quiet) setError(msg);
+          return;
+        }
+        let body: { error?: string } = {};
+        try {
+          body = JSON.parse(text) as { error?: string };
+        } catch {
+          // HTML error page
+        }
         throw new Error(body.error ?? `Scan table failed (${res.status})`);
       }
       const json = normalizeCachedResponse(
@@ -473,7 +519,14 @@ export default function HomePage() {
       );
       setData((prev) => applyScanPayload(json, prev));
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load scan");
+      const msg = err instanceof Error ? err.message : "Failed to load scan";
+      if (msg.toLowerCase().includes("failed to fetch") && isWorkerRateLimited()) {
+        const rateMsg = formatRateLimitError();
+        setRateLimitMsg(rateMsg);
+        if (!options?.quiet) setError(rateMsg);
+      } else {
+        setError(msg);
+      }
     } finally {
       if (!options?.quiet) setLoading(false);
     }
@@ -483,7 +536,11 @@ export default function HomePage() {
     setRescanning(true);
     setError(null);
     try {
-      const res = await fetch("/api/scan?force=true", { cache: "no-store" });
+      const res = await clientFetch("/api/scan?force=true", { cache: "no-store" });
+      if (!res) {
+        setRateLimitMsg(formatRateLimitError());
+        throw new Error(formatRateLimitError());
+      }
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { error?: string };
         throw new Error(body.error ?? `Rescan failed (${res.status})`);
@@ -517,13 +574,14 @@ export default function HomePage() {
   }, [applyScanPayload]);
 
   const retryFailedScan = useCallback(async (options?: { quiet?: boolean }) => {
+    if (isWorkerRateLimited()) return;
     if (!options?.quiet) setRetryingFailed(true);
     try {
-      const res = await fetch("/api/scan/retry-failed", {
+      const res = await clientFetch("/api/scan/retry-failed", {
         method: "POST",
         cache: "no-store",
       });
-      if (!res.ok) return;
+      if (!res?.ok) return;
 
       const json = normalizeCachedResponse(
         (await res.json()) as Partial<CachedScanResponse> & {
@@ -545,13 +603,14 @@ export default function HomePage() {
   }, [applyScanPayload]);
 
   const retryTailScan = useCallback(async (options?: { quiet?: boolean }) => {
+    if (isWorkerRateLimited()) return;
     if (!options?.quiet) setRetryingTail(true);
     try {
-      const res = await fetch("/api/scan/retry-tail", {
+      const res = await clientFetch("/api/scan/retry-tail", {
         method: "POST",
         cache: "no-store",
       });
-      if (!res.ok) return;
+      if (!res?.ok) return;
 
       const json = normalizeCachedResponse(
         (await res.json()) as Partial<CachedScanResponse> & {
@@ -572,9 +631,10 @@ export default function HomePage() {
   }, [applyScanPayload]);
 
   const pollScanStatus = useCallback(async () => {
+    if (isWorkerRateLimited()) return;
     try {
-      const res = await fetch("/api/scan?status=true", { cache: "no-store" });
-      if (!res.ok) return;
+      const res = await clientFetch("/api/scan?status=true", { cache: "no-store" });
+      if (!res?.ok) return;
 
       const status = (await res.json()) as Partial<CachedScanResponse> & {
         scannedAt?: string | null;
@@ -593,9 +653,8 @@ export default function HomePage() {
         };
       });
 
-      if (status.scanInProgress) {
-        void fetchCache({ quiet: true });
-      } else if (status.stale || status.cacheEmpty) {
+      // Full cache refresh during scan is handled by SCAN_POLL; only heal stale/empty here.
+      if (!status.scanInProgress && (status.stale || status.cacheEmpty)) {
         void fetchCache({ quiet: true });
       }
     } catch {
@@ -604,13 +663,22 @@ export default function HomePage() {
   }, [fetchCache]);
 
   const pollNews = useCallback(async (options?: { quiet?: boolean }) => {
+    if (isWorkerRateLimited()) {
+      setNewsError(formatRateLimitError());
+      return;
+    }
     if (!options?.quiet) setNewsLoading(true);
     try {
-      const { ok, status, body } = await fetchJsonWithRetry<{
+      const { ok, status, body, rateLimited } = await fetchJsonWithRetry<{
         headlines?: NewsHeadline[];
         symbolCount?: number;
         error?: string;
       }>("/api/news");
+
+      if (rateLimited || status === 429) {
+        setNewsError(formatRateLimitError());
+        return;
+      }
 
       if (!ok) {
         if (newsHeadlines.length === 0) {
@@ -645,7 +713,12 @@ export default function HomePage() {
       setNewsSymbolCount(body.symbolCount ?? 0);
     } catch (err) {
       if (newsHeadlines.length === 0) {
-        setNewsError(err instanceof Error ? err.message : "Failed to fetch news");
+        const msg = err instanceof Error ? err.message : "Failed to fetch news";
+        setNewsError(
+          isWorkerRateLimited() || msg.toLowerCase().includes("failed to fetch")
+            ? formatRateLimitError()
+            : msg,
+        );
       }
     } finally {
       if (!options?.quiet) setNewsLoading(false);
@@ -685,16 +758,17 @@ export default function HomePage() {
   );
 
   const pollQuotes = useCallback(async () => {
+    if (isWorkerRateLimited()) return;
     try {
       const totalSymbols = data?.results?.length ?? 0;
       if (totalSymbols === 0) return;
 
       const offset = quoteChunkOffsetRef.current % totalSymbols;
-      const res = await fetch(
+      const res = await clientFetch(
         `/api/quotes?offset=${offset}&limit=${QUOTES_CHUNK_SIZE}`,
         { cache: "no-store" },
       );
-      if (!res.ok) return;
+      if (!res?.ok) return;
 
       const body = (await res.json()) as {
         quotes?: Array<{
@@ -720,12 +794,13 @@ export default function HomePage() {
   }, [applyQuotePayload, data?.results?.length]);
 
   const primeHeadQuotes = useCallback(async () => {
+    if (isWorkerRateLimited()) return;
     try {
-      const res = await fetch(
+      const res = await clientFetch(
         `/api/quotes?universeMax=${TAIL_SYMBOL_INDEX - 1}&limit=200`,
         { cache: "no-store" },
       );
-      if (!res.ok) return;
+      if (!res?.ok) return;
 
       const body = (await res.json()) as {
         quotes?: Array<{
@@ -745,12 +820,13 @@ export default function HomePage() {
   }, [applyQuotePayload]);
 
   const primeTailQuotes = useCallback(async () => {
+    if (isWorkerRateLimited()) return;
     try {
-      const res = await fetch(
+      const res = await clientFetch(
         `/api/quotes?universeMin=${TAIL_SYMBOL_INDEX}&limit=500`,
         { cache: "no-store" },
       );
-      if (!res.ok) return;
+      if (!res?.ok) return;
 
       const body = (await res.json()) as {
         quotes?: Array<{
@@ -770,7 +846,7 @@ export default function HomePage() {
   }, [applyQuotePayload]);
 
   const retryChartErrorSymbols = useCallback(async () => {
-    if (chartErrorRetryInFlightRef.current) return;
+    if (chartErrorRetryInFlightRef.current || isWorkerRateLimited()) return;
 
     const errorRows =
       data?.results?.filter(isChartErrorRow) ?? [];
@@ -782,17 +858,18 @@ export default function HomePage() {
         const aStale = isStooqChartError(a.error) ? 0 : 1;
         const bStale = isStooqChartError(b.error) ? 0 : 1;
         return aStale - bStale;
-      });
+      }).slice(0, CHART_ERROR_MAX_PER_CYCLE);
 
       for (let i = 0; i < staleFirst.length; i += 1) {
+        if (isWorkerRateLimited()) break;
         if (i > 0) await new Promise((r) => setTimeout(r, CHART_ERROR_RETRY_STAGGER_MS));
 
         const row = staleFirst[i];
-        const res = await fetch(
+        const res = await clientFetch(
           `/api/scan/symbol?symbol=${encodeURIComponent(row.symbol)}`,
           { cache: "no-store" },
         );
-        if (!res.ok) continue;
+        if (!res?.ok) continue;
 
         const body = (await res.json()) as { result?: StockScanResult };
         if (!body.result) continue;
@@ -813,8 +890,29 @@ export default function HomePage() {
   }, [data?.results]);
 
   useEffect(() => {
-    void fetchCache({ heal: true });
+    void fetchCache();
   }, [fetchCache]);
+
+  useEffect(() => {
+    const tick = () => {
+      setRateLimitMsg(isWorkerRateLimited() ? formatRateLimitError() : null);
+    };
+    tick();
+    const id = setInterval(tick, 1_000);
+    return () => clearInterval(id);
+  }, []);
+
+  useEffect(() => {
+    if (!data) return;
+    const needsHeal =
+      data.cacheEmpty || (data.unscannedCount ?? 0) > 0;
+    if (!needsHeal) return;
+
+    const timer = setTimeout(() => {
+      void fetchCache({ quiet: true, heal: true });
+    }, INITIAL_HEAL_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [data?.cacheEmpty, data?.unscannedCount, fetchCache]);
 
   useEffect(() => {
     if (statusPollRef.current) clearInterval(statusPollRef.current);
@@ -834,31 +932,46 @@ export default function HomePage() {
     if (quotesPollRef.current) clearInterval(quotesPollRef.current);
     if (!data || data.cacheEmpty) return;
 
-    void pollQuotes();
-    quotesPollRef.current = setInterval(() => {
+    const startQuotes = () => {
       void pollQuotes();
-    }, QUOTES_POLL_MS);
+      quotesPollRef.current = setInterval(() => {
+        void pollQuotes();
+      }, QUOTES_POLL_MS);
+    };
+    const timer = setTimeout(startQuotes, INITIAL_QUOTES_DELAY_MS);
 
     return () => {
+      clearTimeout(timer);
       if (quotesPollRef.current) clearInterval(quotesPollRef.current);
     };
   }, [data?.cacheEmpty, pollQuotes]);
 
   useEffect(() => {
     if (!data || data.cacheEmpty) return;
-    void primeHeadQuotes();
-    void primeTailQuotes();
+    const headTimer = setTimeout(() => void primeHeadQuotes(), INITIAL_QUOTES_DELAY_MS);
+    const tailTimer = setTimeout(
+      () => void primeTailQuotes(),
+      INITIAL_QUOTES_DELAY_MS + 8_000,
+    );
+    return () => {
+      clearTimeout(headTimer);
+      clearTimeout(tailTimer);
+    };
   }, [data?.cacheEmpty, data?.scannedAt, primeHeadQuotes, primeTailQuotes]);
 
   useEffect(() => {
     if (newsPollRef.current) clearInterval(newsPollRef.current);
 
-    void pollNews();
-    newsPollRef.current = setInterval(() => {
-      void pollNews({ quiet: true });
-    }, NEWS_POLL_MS);
+    const startNews = () => {
+      void pollNews();
+      newsPollRef.current = setInterval(() => {
+        void pollNews({ quiet: true });
+      }, NEWS_POLL_MS);
+    };
+    const timer = setTimeout(startNews, INITIAL_NEWS_DELAY_MS);
 
     return () => {
+      clearTimeout(timer);
       if (newsPollRef.current) clearInterval(newsPollRef.current);
     };
   }, [pollNews]);
@@ -900,7 +1013,7 @@ export default function HomePage() {
 
     healPollRef.current = setInterval(() => {
       void fetchCache({ quiet: true, heal: true });
-    }, 60_000);
+    }, HEAL_POLL_MS);
 
     return () => {
       if (healPollRef.current) clearInterval(healPollRef.current);
@@ -1166,8 +1279,16 @@ export default function HomePage() {
         </div>
       </section>
 
-      {error && (
-        <div className="card mb-6 border-[var(--red)] p-4 text-[var(--red)]">{error}</div>
+      {((rateLimitMsg ?? error)) && (
+        <div
+          className={`card mb-6 p-4 ${
+            rateLimitMsg
+              ? "border-[var(--amber)] text-[var(--amber)]"
+              : "border-[var(--red)] text-[var(--red)]"
+          }`}
+        >
+          {rateLimitMsg ?? error}
+        </div>
       )}
 
       {retryingTail && !data?.scanInProgress && tailErrorCount > 0 && (
@@ -1428,7 +1549,7 @@ export default function HomePage() {
         algorithmic approximations on 1h/4h bars (40-day window) — confirmed Active
         patterns require neckline break; not TradingView auto-chart-patterns. Full
         EMA/pattern rescans take several minutes; prices and session % refresh every
-        ~45s. When scan data is older than 15 min the client triggers a background
+        ~2 min. When scan data is older than 15 min the client triggers a background
         rescan (Cloudflare cron runs nightly in chunks). Tick-by-tick live data would need a
         different architecture. Cross requires 20 EMA to cross below 50 before crossing
         back above. Not financial advice.
