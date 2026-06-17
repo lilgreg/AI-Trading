@@ -1,11 +1,42 @@
 /** Client-side backoff when the Workers edge returns 429 / CF 1027. */
 
 const RATE_LIMIT_STATUSES = new Set([429, 502, 503]);
+const LS_RATE_LIMIT_KEY = "ema-scanner:worker-rate-limit-until";
 
 let backoffUntilMs = 0;
 let currentBackoffMs = 30_000;
 const MIN_BACKOFF_MS = 30_000;
 const MAX_BACKOFF_MS = 300_000;
+
+function persistRateLimitUntil(): void {
+  if (typeof window === "undefined") return;
+  try {
+    if (backoffUntilMs > Date.now()) {
+      localStorage.setItem(LS_RATE_LIMIT_KEY, String(backoffUntilMs));
+    } else {
+      localStorage.removeItem(LS_RATE_LIMIT_KEY);
+    }
+  } catch {
+    // private browsing / quota
+  }
+}
+
+/** Restore backoff from a prior tab session so mount does not hammer the worker. */
+export function hydrateRateLimitFromStorage(): void {
+  if (typeof window === "undefined") return;
+  try {
+    const raw = localStorage.getItem(LS_RATE_LIMIT_KEY);
+    if (!raw) return;
+    const until = Number(raw);
+    if (!Number.isFinite(until) || until <= Date.now()) {
+      localStorage.removeItem(LS_RATE_LIMIT_KEY);
+      return;
+    }
+    backoffUntilMs = until;
+  } catch {
+    // ignore
+  }
+}
 
 function bodyLooksRateLimited(bodyText: string): boolean {
   const lower = bodyText.toLowerCase();
@@ -29,11 +60,13 @@ export function noteWorkerRateLimit(status?: number, bodyText?: string): void {
 
   backoffUntilMs = Date.now() + currentBackoffMs;
   currentBackoffMs = Math.min(currentBackoffMs * 2, MAX_BACKOFF_MS);
+  persistRateLimitUntil();
 }
 
 export function noteWorkerSuccess(): void {
   currentBackoffMs = MIN_BACKOFF_MS;
   backoffUntilMs = 0;
+  persistRateLimitUntil();
 }
 
 export function formatRateLimitError(): string {

@@ -44,7 +44,7 @@ head_sampling_rate = 1
 
 # Public runtime vars — CI injects before deploy (see deploy-cloudflare.yml).
 [vars]
-NEXT_PUBLIC_NEWS_POLL_MS = "120000"
+NEXT_PUBLIC_NEWS_POLL_MS = "300000"
 SCAN_RUNTIME = "cloudflare"
 YAHOO_CACHE_TTL_MS = "900000"
 YAHOO_QUOTE_BATCH_SIZE = "80"

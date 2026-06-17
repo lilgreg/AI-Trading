@@ -36,6 +36,8 @@ export const maxDuration = 300;
 
 const SYNC_RETRY_FAILED_LIMIT = 25;
 const WORKERS_QUOTE_ENRICH_LIMIT = 24;
+/** Short CDN/browser cache for read-only scan GETs — absorbs repeat polls. */
+const SCAN_READ_CACHE_MAX_AGE_SEC = 45;
 
 async function enrichScanResponseQuotes(
   snapshot: ScanSnapshot | null,
@@ -295,16 +297,10 @@ export async function GET(request: NextRequest) {
       ? countCross4hGapRows(snapshot.results)
       : 0;
     const hasCross4hGaps = cross4hGapCount > 0;
-    const needsHeal = hasUnscanned || hasStaleChartRows || hasCross4hGaps;
 
     const status = await buildStatusFromMeta(meta);
 
-    if (!snapshotLooksCorrupted(snapshot) && (status.cacheEmpty || hasUnscanned)) {
-      scheduleScanJob({});
-    } else if (status.stale && !hasUnscanned && !snapshotLooksCorrupted(snapshot)) {
-      scheduleScanJob({});
-    }
-
+    // Full universe scans run via cron chunks or explicit ?force=true — not on every GET.
     let responseSnapshot = snapshot;
 
     if (heal) {
@@ -345,43 +341,12 @@ export async function GET(request: NextRequest) {
       } catch {
         // best-effort quote enrich for table display
       }
-    } else if (needsHeal) {
-      scheduleBackgroundTask(async () => {
-        const { sleep } = await import("@/lib/request-limit");
-        try {
-          let current = await loadSnapshot({ enrich: false });
-          if (!current?.results?.length) return;
-          if (countCross4hGapRows(current.results) > 0) {
-            for (let round = 0; round < 12; round += 1) {
-              if (!current?.results?.length || countCross4hGapRows(current.results) === 0) {
-                break;
-              }
-              await healCacheOnRead(current, {}, { maxSymbols: 4 });
-              await sleep(2_000);
-              current = await loadSnapshot({ enrich: false });
-            }
-          }
-          const nullPriceSymbols =
-            current?.results?.filter((row) => row.price == null && !row.error) ?? [];
-          if (nullPriceSymbols.length > 0) {
-            const quotes = await fetchQuoteUpdates(
-              nullPriceSymbols.map((row) => row.symbol),
-              { offset: 0, limit: WORKERS_QUOTE_ENRICH_LIMIT },
-            );
-            if (quotes.length && current) {
-              const results = applyQuoteUpdates(current.results, quotes);
-              await saveSnapshot({
-                ...current,
-                results,
-                lastSavedAt: new Date().toISOString(),
-              });
-            }
-          }
-        } catch {
-          // best-effort background maintenance
-        }
-      });
     }
+
+    const cacheControl =
+      heal || force
+        ? "no-store"
+        : `private, max-age=${SCAN_READ_CACHE_MAX_AGE_SEC}`;
 
     return NextResponse.json(
       {
@@ -401,7 +366,7 @@ export async function GET(request: NextRequest) {
             ? countCross4hGapRows(responseSnapshot.results)
             : 0,
       },
-      { headers: { "Cache-Control": "no-store" } },
+      { headers: { "Cache-Control": cacheControl } },
     );
   }
 

@@ -1,5 +1,9 @@
 import { default as handler } from "./.open-next/worker.js";
 import { runScanChunk } from "./lib/scan-job";
+import {
+  guardWorkerRequest,
+  recordGlobalRequest,
+} from "./lib/worker-request-guard";
 
 /** Cron chunk schedule — small slices to stay under Workers subrequest limits. */
 const SCAN_CRON_CHUNKS: Record<string, { offset: number; limit: number }> = {
@@ -10,7 +14,28 @@ const SCAN_CRON_CHUNKS: Record<string, { offset: number; limit: number }> = {
 };
 
 export default {
-  fetch: handler.fetch,
+  async fetch(request: Request, env: CloudflareEnv, ctx: ExecutionContext) {
+    const guard = guardWorkerRequest(request.url);
+    if (!guard.allowed) {
+      return new Response(
+        JSON.stringify({
+          error: "Too many requests — try again shortly",
+          retryAfterSec: guard.retryAfterSec,
+        }),
+        {
+          status: 429,
+          headers: {
+            "Content-Type": "application/json",
+            "Retry-After": String(guard.retryAfterSec),
+            "Cache-Control": "no-store",
+          },
+        },
+      );
+    }
+
+    ctx.waitUntil(recordGlobalRequest(env));
+    return handler.fetch!(request, env, ctx);
+  },
 
   async scheduled(
     controller: ScheduledController,

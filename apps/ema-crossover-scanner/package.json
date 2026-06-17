@@ -9,6 +9,7 @@
     "pages:build": "npm run build && npm run build:worker",
     "start": "next start",
     "lint": "eslint .",
+    "verify:prod": "tsx scripts/verify-prod-full.ts",
     "scan": "tsx scripts/run-scan.ts",
     "preview": "opennextjs-cloudflare build && opennextjs-cloudflare preview",
     "deploy": "opennextjs-cloudflare build && opennextjs-cloudflare deploy",

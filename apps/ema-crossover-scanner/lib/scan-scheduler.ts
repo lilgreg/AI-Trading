@@ -119,15 +119,24 @@ export async function runChunkedScan(
 }
 
 /** Fire-and-forget scan — chunked on Workers, full scan elsewhere. */
+let scanJobQueued = false;
+
 export function scheduleScanJob(
   overrides: Partial<ScanJobConfig> = {},
   options: { force?: boolean } = {},
 ): void {
+  if (scanJobQueued) return;
+
+  scanJobQueued = true;
   scheduleBackgroundTask(async () => {
-    if (isCloudflareWorkersRuntime()) {
-      await runChunkedScan(overrides, options);
-      return;
+    try {
+      if (isCloudflareWorkersRuntime()) {
+        await runChunkedScan(overrides, options);
+        return;
+      }
+      await runBackgroundScan(overrides, options);
+    } finally {
+      scanJobQueued = false;
     }
-    await runBackgroundScan(overrides, options);
   });
 }

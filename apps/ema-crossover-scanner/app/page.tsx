@@ -22,9 +22,11 @@ import { prefetchNewsPreview } from "@/lib/news-preview-cache";
 import {
   clientFetch,
   formatRateLimitError,
+  hydrateRateLimitFromStorage,
   isWorkerRateLimited,
   noteWorkerRateLimit,
 } from "@/lib/client-poll";
+import { createPollCoordinator } from "@/lib/poll-coordinator";
 import type {
   CachedScanResponse,
   CrossoverDisplay,
@@ -259,24 +261,25 @@ function sortIndicator(active: boolean, dir: SortDir): string {
   return dir === "asc" ? " ↑" : " ↓";
 }
 
-const STATUS_POLL_MS = 120_000;
-const QUOTES_POLL_MS = 120_000;
+const STATUS_POLL_MS = 180_000;
+const QUOTES_POLL_MS = 180_000;
 const QUOTES_CHUNK_SIZE = 200;
 const RETRY_FAILED_THRESHOLD = 10;
-const RETRY_POLL_MS = 120_000;
+const RETRY_POLL_MS = 180_000;
 /** Universe index at/after which symbols use staggered chart fetch + deferred retry. */
 const TAIL_SYMBOL_INDEX = 122;
-const TAIL_RETRY_POLL_MS = 120_000;
+const TAIL_RETRY_POLL_MS = 180_000;
 const TAIL_RETRY_MAX_ATTEMPTS = 10;
-const CHART_ERROR_RETRY_MS = 120_000;
+const CHART_ERROR_RETRY_MS = 180_000;
 const CHART_ERROR_RETRY_STAGGER_MS = 5_000;
 const CHART_ERROR_MAX_PER_CYCLE = 2;
-const NEWS_POLL_MS = Number(process.env.NEXT_PUBLIC_NEWS_POLL_MS ?? 120_000);
+const NEWS_POLL_MS = Number(process.env.NEXT_PUBLIC_NEWS_POLL_MS ?? 300_000);
 const SCAN_POLL_MS = 60_000;
 const HEAL_POLL_MS = 300_000;
-const INITIAL_NEWS_DELAY_MS = 15_000;
-const INITIAL_QUOTES_DELAY_MS = 10_000;
-const INITIAL_HEAL_DELAY_MS = 45_000;
+const COORDINATOR_TICK_MS = 20_000;
+const INITIAL_NEWS_DELAY_MS = 20_000;
+const INITIAL_QUOTES_DELAY_MS = 15_000;
+const INITIAL_HEAL_DELAY_MS = 60_000;
 const NEWS_POLL_LABEL_SEC = Math.round(NEWS_POLL_MS / 1000);
 const NEWS_FETCH_TIMEOUT_MS = 45_000;
 const NEWS_FETCH_RETRIES = 3;
@@ -449,16 +452,12 @@ export default function HomePage() {
   const [selectedNewsArticle, setSelectedNewsArticle] = useState<NewsHeadline | null>(
     null,
   );
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const healPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const retryPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const tailRetryPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const chartErrorRetryPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const chartErrorRetryInFlightRef = useRef(false);
-  const statusPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const quotesPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pageVisibleRef = useRef(true);
   const quoteChunkOffsetRef = useRef(0);
-  const newsPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const seenNewsIdsRef = useRef<Set<string>>(new Set());
   const newsBarRef = useRef<HTMLElement | null>(null);
 
@@ -574,7 +573,7 @@ export default function HomePage() {
   }, [applyScanPayload]);
 
   const retryFailedScan = useCallback(async (options?: { quiet?: boolean }) => {
-    if (isWorkerRateLimited()) return;
+    if (!pageVisibleRef.current || isWorkerRateLimited()) return;
     if (!options?.quiet) setRetryingFailed(true);
     try {
       const res = await clientFetch("/api/scan/retry-failed", {
@@ -603,7 +602,7 @@ export default function HomePage() {
   }, [applyScanPayload]);
 
   const retryTailScan = useCallback(async (options?: { quiet?: boolean }) => {
-    if (isWorkerRateLimited()) return;
+    if (!pageVisibleRef.current || isWorkerRateLimited()) return;
     if (!options?.quiet) setRetryingTail(true);
     try {
       const res = await clientFetch("/api/scan/retry-tail", {
@@ -631,7 +630,7 @@ export default function HomePage() {
   }, [applyScanPayload]);
 
   const pollScanStatus = useCallback(async () => {
-    if (isWorkerRateLimited()) return;
+    if (!pageVisibleRef.current || isWorkerRateLimited()) return;
     try {
       const res = await clientFetch("/api/scan?status=true", { cache: "no-store" });
       if (!res?.ok) return;
@@ -663,7 +662,7 @@ export default function HomePage() {
   }, [fetchCache]);
 
   const pollNews = useCallback(async (options?: { quiet?: boolean }) => {
-    if (isWorkerRateLimited()) {
+    if (!pageVisibleRef.current || isWorkerRateLimited()) {
       setNewsError(formatRateLimitError());
       return;
     }
@@ -758,7 +757,7 @@ export default function HomePage() {
   );
 
   const pollQuotes = useCallback(async () => {
-    if (isWorkerRateLimited()) return;
+    if (!pageVisibleRef.current || isWorkerRateLimited()) return;
     try {
       const totalSymbols = data?.results?.length ?? 0;
       if (totalSymbols === 0) return;
@@ -794,7 +793,7 @@ export default function HomePage() {
   }, [applyQuotePayload, data?.results?.length]);
 
   const primeAllQuotes = useCallback(async () => {
-    if (isWorkerRateLimited()) return;
+    if (!pageVisibleRef.current || isWorkerRateLimited()) return;
     try {
       const res = await clientFetch(`/api/quotes?limit=500`, { cache: "no-store" });
       if (!res?.ok) return;
@@ -817,7 +816,7 @@ export default function HomePage() {
   }, [applyQuotePayload]);
 
   const retryChartErrorSymbols = useCallback(async () => {
-    if (chartErrorRetryInFlightRef.current || isWorkerRateLimited()) return;
+    if (chartErrorRetryInFlightRef.current || !pageVisibleRef.current || isWorkerRateLimited()) return;
 
     const errorRows =
       data?.results?.filter(isChartErrorRow) ?? [];
@@ -861,8 +860,23 @@ export default function HomePage() {
   }, [data?.results]);
 
   useEffect(() => {
+    hydrateRateLimitFromStorage();
+    if (isWorkerRateLimited()) {
+      setRateLimitMsg(formatRateLimitError());
+      setLoading(false);
+      return;
+    }
     void fetchCache();
   }, [fetchCache]);
+
+  useEffect(() => {
+    const onVisibility = () => {
+      pageVisibleRef.current = !document.hidden;
+    };
+    onVisibility();
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
+  }, []);
 
   useEffect(() => {
     const tick = () => {
@@ -874,84 +888,77 @@ export default function HomePage() {
   }, []);
 
   useEffect(() => {
-    if (!data) return;
-    const needsHeal =
-      data.cacheEmpty || (data.unscannedCount ?? 0) > 0;
-    if (!needsHeal) return;
+    const coordinator = createPollCoordinator({
+      tickMs: COORDINATOR_TICK_MS,
+      isPaused: () => !pageVisibleRef.current || isWorkerRateLimited(),
+    });
 
-    const timer = setTimeout(() => {
-      void fetchCache({ quiet: true, heal: true });
-    }, INITIAL_HEAL_DELAY_MS);
-    return () => clearTimeout(timer);
-  }, [data?.cacheEmpty, data?.unscannedCount, fetchCache]);
+    coordinator.register({
+      name: "scan-progress",
+      intervalMs: SCAN_POLL_MS,
+      enabled: () => Boolean(data?.scanInProgress),
+      run: () => fetchCache({ quiet: true }),
+    });
+    coordinator.register({
+      name: "status",
+      intervalMs: STATUS_POLL_MS,
+      enabled: () => Boolean(data),
+      run: () => pollScanStatus(),
+    });
+    coordinator.register({
+      name: "quotes",
+      intervalMs: QUOTES_POLL_MS,
+      enabled: () => Boolean(data && !data.cacheEmpty),
+      run: () => pollQuotes(),
+    });
+    coordinator.register({
+      name: "news",
+      intervalMs: NEWS_POLL_MS,
+      run: () => pollNews({ quiet: true }),
+    });
+    coordinator.register({
+      name: "heal",
+      intervalMs: HEAL_POLL_MS,
+      enabled: () =>
+        Boolean(
+          data &&
+            (data.cacheEmpty || (data.unscannedCount ?? 0) > 0),
+        ),
+      run: () => fetchCache({ quiet: true, heal: true }),
+    });
 
-  useEffect(() => {
-    if (statusPollRef.current) clearInterval(statusPollRef.current);
-    if (!data) return;
-
-    void pollScanStatus();
-    statusPollRef.current = setInterval(() => {
-      void pollScanStatus();
-    }, STATUS_POLL_MS);
-
-    return () => {
-      if (statusPollRef.current) clearInterval(statusPollRef.current);
-    };
-  }, [data?.scannedAt, data?.cacheEmpty, pollScanStatus]);
-
-  useEffect(() => {
-    if (quotesPollRef.current) clearInterval(quotesPollRef.current);
-    if (!data || data.cacheEmpty) return;
-
-    const startQuotes = () => {
-      void pollQuotes();
-      quotesPollRef.current = setInterval(() => {
-        void pollQuotes();
-      }, QUOTES_POLL_MS);
-    };
-    const timer = setTimeout(startQuotes, INITIAL_QUOTES_DELAY_MS);
-
-    return () => {
-      clearTimeout(timer);
-      if (quotesPollRef.current) clearInterval(quotesPollRef.current);
-    };
-  }, [data?.cacheEmpty, pollQuotes]);
-
-  useEffect(() => {
-    if (!data || data.cacheEmpty) return;
-    const timer = setTimeout(() => void primeAllQuotes(), INITIAL_QUOTES_DELAY_MS);
-    return () => clearTimeout(timer);
-  }, [data?.cacheEmpty, data?.scannedAt, primeAllQuotes]);
-
-  useEffect(() => {
-    if (newsPollRef.current) clearInterval(newsPollRef.current);
-
-    const startNews = () => {
-      void pollNews();
-      newsPollRef.current = setInterval(() => {
-        void pollNews({ quiet: true });
-      }, NEWS_POLL_MS);
-    };
-    const timer = setTimeout(startNews, INITIAL_NEWS_DELAY_MS);
+    const boot = setTimeout(() => {
+      coordinator.start();
+      if (data && !data.cacheEmpty) {
+        setTimeout(() => void pollQuotes(), INITIAL_QUOTES_DELAY_MS);
+        setTimeout(() => void primeAllQuotes(), INITIAL_QUOTES_DELAY_MS);
+      }
+      setTimeout(() => void pollNews(), INITIAL_NEWS_DELAY_MS);
+      if (
+        data &&
+        (data.cacheEmpty || (data.unscannedCount ?? 0) > 0)
+      ) {
+        setTimeout(
+          () => void fetchCache({ quiet: true, heal: true }),
+          INITIAL_HEAL_DELAY_MS,
+        );
+      }
+    }, 2_000);
 
     return () => {
-      clearTimeout(timer);
-      if (newsPollRef.current) clearInterval(newsPollRef.current);
+      clearTimeout(boot);
+      coordinator.stop();
     };
-  }, [pollNews]);
-
-  useEffect(() => {
-    if (pollRef.current) clearInterval(pollRef.current);
-    if (!data?.scanInProgress) return;
-
-    pollRef.current = setInterval(() => {
-      void fetchCache({ quiet: true });
-    }, SCAN_POLL_MS);
-
-    return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
-    };
-  }, [data?.scanInProgress, fetchCache]);
+  }, [
+    data?.cacheEmpty,
+    data?.scanInProgress,
+    data?.unscannedCount,
+    fetchCache,
+    pollNews,
+    pollQuotes,
+    pollScanStatus,
+    primeAllQuotes,
+  ]);
 
   const errorCount = useMemo(
     () => data?.results?.filter((r) => r.error).length ?? 0,
@@ -970,19 +977,6 @@ export default function HomePage() {
       0,
     [data?.results, data?.unscannedCount],
   );
-
-  useEffect(() => {
-    if (healPollRef.current) clearInterval(healPollRef.current);
-    if (!data || data.cacheEmpty || unscannedCount === 0) return;
-
-    healPollRef.current = setInterval(() => {
-      void fetchCache({ quiet: true, heal: true });
-    }, HEAL_POLL_MS);
-
-    return () => {
-      if (healPollRef.current) clearInterval(healPollRef.current);
-    };
-  }, [data?.cacheEmpty, unscannedCount, fetchCache]);
 
   const shouldRetryFailed =
     (errorCount > RETRY_FAILED_THRESHOLD ||
@@ -1513,8 +1507,8 @@ export default function HomePage() {
         algorithmic approximations on 1h/4h bars (40-day window) — confirmed Active
         patterns require neckline break; not TradingView auto-chart-patterns. Full
         EMA/pattern rescans take several minutes; prices and session % refresh every
-        ~2 min. When scan data is older than 15 min the client triggers a background
-        rescan (Cloudflare cron runs nightly in chunks). Tick-by-tick live data would need a
+        ~2 min. When scan data is older than 15 min use Rescan now or wait for
+        nightly cron (Cloudflare runs chunked scans). Tick-by-tick live data would need a
         different architecture. Cross requires 20 EMA to cross below 50 before crossing
         back above. Not financial advice.
       </footer>
