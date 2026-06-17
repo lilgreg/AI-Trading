@@ -116,10 +116,12 @@ export async function loadSnapshot(
 ): Promise<ScanSnapshot | null> {
   const shouldEnrich =
     options.enrich ?? !isCloudflareWorkersRuntime();
+  const useMemoryCache =
+    !isCloudflareWorkersRuntime() && memorySnapshot != null;
 
-  if (memorySnapshot) {
+  if (useMemoryCache) {
     if (!shouldEnrich) return memorySnapshot;
-    memorySnapshot = await enrichSnapshot(memorySnapshot);
+    memorySnapshot = await enrichSnapshot(memorySnapshot!);
     return memorySnapshot;
   }
 
