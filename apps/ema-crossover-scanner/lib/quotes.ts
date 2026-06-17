@@ -1,13 +1,8 @@
 import type { QuoteUpdate } from "./quote-updates";
-import { isCloudflareWorkersRuntime } from "./runtime";
-import { sleep } from "./request-limit";
 import { resolveSessionChanges } from "./session-snapshot";
-import { fetchQuoteMeta } from "./yahoo";
+import { fetchBatchQuoteMeta } from "./yahoo";
 
 export type { QuoteUpdate } from "./quote-updates";
-
-const QUOTE_BATCH_SIZE = isCloudflareWorkersRuntime() ? 4 : 12;
-const QUOTE_BATCH_PAUSE_MS = 400;
 
 /** Lightweight Yahoo quote fetch — price and session % only (no EMA/pattern rescan). */
 export async function fetchQuoteUpdates(
@@ -20,43 +15,45 @@ export async function fetchQuoteUpdates(
       ? symbols.slice(offset, offset + options.limit)
       : symbols.slice(offset);
 
+  if (slice.length === 0) return [];
+
+  const metaBySymbol = await fetchBatchQuoteMeta(slice);
   const updates: QuoteUpdate[] = [];
 
-  for (let i = 0; i < slice.length; i += QUOTE_BATCH_SIZE) {
-    if (i > 0) {
-      await sleep(QUOTE_BATCH_PAUSE_MS);
-    }
-
-    const batch = slice.slice(i, i + QUOTE_BATCH_SIZE);
-    const batchResults = await Promise.all(
-      batch.map(async (symbol) => {
-        const meta = await fetchQuoteMeta(symbol);
-        const resolved = await resolveSessionChanges(
-          {
-            symbol,
-            preMarketChange: meta.preMarketChange,
-            regularMarketChange: meta.regularMarketChange,
-            postMarketChange: meta.postMarketChange,
-            sessionSnapshotDate: null,
-          },
-          {
-            preMarketChange: meta.preMarketChange,
-            regularMarketChange: meta.regularMarketChange,
-            postMarketChange: meta.postMarketChange,
-          },
-        );
-        return {
-          symbol,
-          price: meta.price,
-          dailyChange: meta.dailyChange,
-          preMarketChange: resolved.preMarketChange,
-          regularMarketChange: resolved.regularMarketChange,
-          postMarketChange: resolved.postMarketChange,
-          sessionSnapshotDate: resolved.sessionSnapshotDate ?? null,
-        };
-      }),
+  for (const symbol of slice) {
+    const meta = metaBySymbol.get(symbol) ?? {
+      name: null,
+      price: null,
+      exchange: null,
+      quoteExchange: null,
+      dailyChange: null,
+      preMarketChange: null,
+      regularMarketChange: null,
+      postMarketChange: null,
+    };
+    const resolved = await resolveSessionChanges(
+      {
+        symbol,
+        preMarketChange: meta.preMarketChange,
+        regularMarketChange: meta.regularMarketChange,
+        postMarketChange: meta.postMarketChange,
+        sessionSnapshotDate: null,
+      },
+      {
+        preMarketChange: meta.preMarketChange,
+        regularMarketChange: meta.regularMarketChange,
+        postMarketChange: meta.postMarketChange,
+      },
     );
-    updates.push(...batchResults);
+    updates.push({
+      symbol,
+      price: meta.price,
+      dailyChange: meta.dailyChange,
+      preMarketChange: resolved.preMarketChange,
+      regularMarketChange: resolved.regularMarketChange,
+      postMarketChange: resolved.postMarketChange,
+      sessionSnapshotDate: resolved.sessionSnapshotDate ?? null,
+    });
   }
 
   return updates;

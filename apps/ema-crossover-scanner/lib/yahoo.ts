@@ -8,6 +8,10 @@ import {
 } from "./market-session";
 import { retryWithBackoff, sleep, yahooLimiter } from "./request-limit";
 import { resolveYahooChartSymbol } from "./stocks";
+import {
+  getYahooCached,
+  setYahooCached,
+} from "./yahoo-cache";
 
 const yahooFinance = new YahooFinance({ suppressNotices: ["yahooSurvey"] });
 
@@ -25,6 +29,21 @@ export const YAHOO_RETRY_TIMEOUT_MS = parseTimeoutMs(
 );
 /** Cap chart HTTP timeouts so Vercel YAHOO_TIMEOUT_MS=15000 does not block failover. */
 export const YAHOO_CHART_TIMEOUT_MS = Math.min(YAHOO_TIMEOUT_MS, 5_000);
+
+/** Yahoo v7 batch quote API — up to ~200 symbols per request. */
+export const YAHOO_QUOTE_BATCH_SIZE = Number(
+  process.env.YAHOO_QUOTE_BATCH_SIZE ?? 80,
+);
+
+type SerializedBar = Omit<OhlcBar, "date"> & { date: string };
+
+function serializeBars(bars: OhlcBar[]): SerializedBar[] {
+  return bars.map(({ date, ...rest }) => ({ ...rest, date: date.toISOString() }));
+}
+
+function deserializeBars(bars: SerializedBar[]): OhlcBar[] {
+  return bars.map(({ date, ...rest }) => ({ ...rest, date: new Date(date) }));
+}
 
 const YAHOO_USER_AGENTS = [
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -124,7 +143,7 @@ async function fetchYahooChartJson(
 }
 
 /** Yahoo chart v8 with period1/period2 (query1 + query2). */
-export async function fetchYahooChartV8Direct(
+async function fetchYahooChartV8DirectUncached(
   symbol: string,
   days: number,
   timeoutMs = YAHOO_TIMEOUT_MS,
@@ -160,8 +179,21 @@ export async function fetchYahooChartV8Direct(
     : new Error(`Yahoo v8 chart failed for ${symbol}`);
 }
 
+export async function fetchYahooChartV8Direct(
+  symbol: string,
+  days: number,
+  timeoutMs = YAHOO_TIMEOUT_MS,
+): Promise<OhlcBar[]> {
+  const cacheId = `${symbol.toUpperCase()}:${days}`;
+  const cached = await getYahooCached<SerializedBar[]>("chart-v8", cacheId);
+  if (cached) return deserializeBars(cached);
+  const bars = await fetchYahooChartV8DirectUncached(symbol, days, timeoutMs);
+  await setYahooCached("chart-v8", cacheId, serializeBars(bars));
+  return bars;
+}
+
 /** Yahoo chart v8 with range param — alternate endpoint rotation. */
-export async function fetchYahooChartV8Range(
+async function fetchYahooChartV8RangeUncached(
   symbol: string,
   days: number,
   timeoutMs = YAHOO_TIMEOUT_MS,
@@ -195,6 +227,19 @@ export async function fetchYahooChartV8Range(
     : new Error(`Yahoo v8 range chart failed for ${symbol}`);
 }
 
+export async function fetchYahooChartV8Range(
+  symbol: string,
+  days: number,
+  timeoutMs = YAHOO_TIMEOUT_MS,
+): Promise<OhlcBar[]> {
+  const cacheId = `${symbol.toUpperCase()}:${days}`;
+  const cached = await getYahooCached<SerializedBar[]>("chart-v8-range", cacheId);
+  if (cached) return deserializeBars(cached);
+  const bars = await fetchYahooChartV8RangeUncached(symbol, days, timeoutMs);
+  await setYahooCached("chart-v8-range", cacheId, serializeBars(bars));
+  return bars;
+}
+
 function parseYahooSpark(body: {
   spark?: {
     result?: Array<{
@@ -226,7 +271,7 @@ function parseYahooSpark(body: {
 }
 
 /** Lightweight Yahoo Spark API — keyless fallback when v8/library are throttled. */
-export async function fetchYahooSparkHourlyBars(
+async function fetchYahooSparkHourlyBarsUncached(
   symbol: string,
   days: number,
   timeoutMs = YAHOO_TIMEOUT_MS,
@@ -280,6 +325,19 @@ export async function fetchYahooSparkHourlyBars(
   throw lastError instanceof Error
     ? lastError
     : new Error(`Yahoo spark failed for ${symbol}`);
+}
+
+export async function fetchYahooSparkHourlyBars(
+  symbol: string,
+  days: number,
+  timeoutMs = YAHOO_TIMEOUT_MS,
+): Promise<OhlcBar[]> {
+  const cacheId = `${symbol.toUpperCase()}:${days}`;
+  const cached = await getYahooCached<SerializedBar[]>("chart-spark", cacheId);
+  if (cached) return deserializeBars(cached);
+  const bars = await fetchYahooSparkHourlyBarsUncached(symbol, days, timeoutMs);
+  await setYahooCached("chart-spark", cacheId, serializeBars(bars));
+  return bars;
 }
 
 /** yahoo-finance2 library chart — slower, often throttled after ~120 symbols. */
@@ -696,22 +754,109 @@ const EMPTY_QUOTE_META = {
   postMarketChange: null,
 } as const;
 
-export async function fetchQuoteMeta(rawSymbol: string): Promise<{
+export type QuoteMeta = {
   name: string | null;
   price: number | null;
   exchange: string | null;
   quoteExchange: string | null;
   dailyChange: number | null;
-} & QuoteSessionChanges> {
+} & QuoteSessionChanges;
+
+async function fetchV7QuoteBatchUncached(
+  symbols: string[],
+): Promise<Map<string, QuoteMeta>> {
+  const resolved = symbols.map((s) => resolveYahooChartSymbol(s).toUpperCase());
+  const unique = [...new Set(resolved)];
+  const url = new URL("https://query1.finance.yahoo.com/v7/finance/quote");
+  url.searchParams.set("symbols", unique.join(","));
+
+  const body = await withTimeout(
+    fetch(url, {
+      headers: { "User-Agent": YAHOO_USER_AGENTS[0] },
+      cache: "no-store",
+    }).then(async (res) => {
+      if (!res.ok) {
+        throw new Error(`Yahoo v7 quote HTTP ${res.status} for ${unique.length} symbols`);
+      }
+      return res.json() as Promise<{
+        quoteResponse?: { result?: Array<Record<string, unknown>> };
+      }>;
+    }),
+    YAHOO_CHART_TIMEOUT_MS,
+    `Yahoo v7 batch quote (${unique.length} symbols)`,
+  );
+
+  const out = new Map<string, QuoteMeta>();
+  for (const raw of body.quoteResponse?.result ?? []) {
+    const sym =
+      typeof raw.symbol === "string" ? raw.symbol.toUpperCase() : "";
+    if (!sym) continue;
+    out.set(sym, parseQuoteMetaFromRecord(raw));
+  }
+  return out;
+}
+
+/** Batch quote fetch — one Yahoo v7 request per up-to-80-symbol chunk. */
+export async function fetchBatchQuoteMeta(
+  symbols: string[],
+): Promise<Map<string, QuoteMeta>> {
+  const out = new Map<string, QuoteMeta>();
+  const uncached: string[] = [];
+
+  for (const sym of symbols) {
+    const chartSym = resolveYahooChartSymbol(sym);
+    const cached = await getYahooCached<QuoteMeta>("quote", chartSym);
+    if (cached) {
+      out.set(sym, cached);
+    } else {
+      uncached.push(sym);
+    }
+  }
+
+  if (uncached.length === 0) return out;
+
+  for (let i = 0; i < uncached.length; i += YAHOO_QUOTE_BATCH_SIZE) {
+    const batch = uncached.slice(i, i + YAHOO_QUOTE_BATCH_SIZE);
+    const batchMap = await yahooLimiter.run(() => fetchV7QuoteBatchUncached(batch));
+
+    for (const sym of batch) {
+      const chartSym = resolveYahooChartSymbol(sym);
+      const upper = chartSym.toUpperCase();
+      const meta =
+        batchMap.get(upper) ??
+        batchMap.get(chartSym) ??
+        ({ ...EMPTY_QUOTE_META } satisfies QuoteMeta);
+      await setYahooCached("quote", chartSym, meta);
+      out.set(sym, meta);
+    }
+  }
+
+  return out;
+}
+
+export async function fetchQuoteMeta(rawSymbol: string): Promise<QuoteMeta> {
+  const batch = await fetchBatchQuoteMeta([rawSymbol]);
+  const meta = batch.get(rawSymbol);
+  if (meta && meta.price != null) return meta;
+
   const symbol = resolveYahooChartSymbol(rawSymbol);
-  // Direct v8 HTTP first — avoids yahoo-finance2 quote timeouts on tail symbols.
+  const cachedV8 = await getYahooCached<QuoteMeta>("quote-v8", symbol);
+  if (cachedV8) {
+    await setYahooCached("quote", symbol, cachedV8);
+    return cachedV8;
+  }
+
   try {
     const viaV8 = await yahooLimiter.run(() =>
       fetchQuoteMetaViaV8Chart(rawSymbol),
     );
-    if (viaV8) return viaV8;
+    if (viaV8) {
+      await setYahooCached("quote-v8", symbol, viaV8);
+      await setYahooCached("quote", symbol, viaV8);
+      return viaV8;
+    }
   } catch {
-    // fall through to library quote
+    // fall through
   }
 
   try {
@@ -731,8 +876,10 @@ export async function fetchQuoteMeta(rawSymbol: string): Promise<{
         },
       ),
     );
-    return parseQuoteMetaFromRecord(quote as unknown as Record<string, unknown>);
+    const parsed = parseQuoteMetaFromRecord(quote as unknown as Record<string, unknown>);
+    await setYahooCached("quote", symbol, parsed);
+    return parsed;
   } catch {
-    return { ...EMPTY_QUOTE_META };
+    return meta ?? { ...EMPTY_QUOTE_META };
   }
 }

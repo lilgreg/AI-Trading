@@ -2,6 +2,7 @@ import type { SessionChanges } from "./market-session";
 import { getUsMarketSession } from "./market-session";
 import { resolveYahooChartSymbol } from "./stocks";
 import type { StockScanResult } from "./types";
+import { getYahooCached, setYahooCached } from "./yahoo-cache";
 import { YAHOO_CHART_TIMEOUT_MS } from "./yahoo";
 
 const YAHOO_USER_AGENT =
@@ -70,6 +71,18 @@ function parseIntradayBars(body: {
  * Used overnight when live quote fields are null.
  */
 export async function fetchSessionChangesFromChart(
+  rawSymbol: string,
+): Promise<SessionChanges | null> {
+  const symbol = resolveYahooChartSymbol(rawSymbol);
+  const cached = await getYahooCached<SessionChanges>("session-chart", symbol);
+  if (cached) return cached;
+
+  const derived = await fetchSessionChangesFromChartUncached(rawSymbol);
+  if (derived) await setYahooCached("session-chart", symbol, derived);
+  return derived;
+}
+
+async function fetchSessionChangesFromChartUncached(
   rawSymbol: string,
 ): Promise<SessionChanges | null> {
   const symbol = resolveYahooChartSymbol(rawSymbol);

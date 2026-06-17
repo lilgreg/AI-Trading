@@ -261,7 +261,7 @@ function sortIndicator(active: boolean, dir: SortDir): string {
 
 const STATUS_POLL_MS = 120_000;
 const QUOTES_POLL_MS = 120_000;
-const QUOTES_CHUNK_SIZE = 80;
+const QUOTES_CHUNK_SIZE = 200;
 const RETRY_FAILED_THRESHOLD = 10;
 const RETRY_POLL_MS = 120_000;
 /** Universe index at/after which symbols use staggered chart fetch + deferred retry. */
@@ -793,13 +793,10 @@ export default function HomePage() {
     }
   }, [applyQuotePayload, data?.results?.length]);
 
-  const primeHeadQuotes = useCallback(async () => {
+  const primeAllQuotes = useCallback(async () => {
     if (isWorkerRateLimited()) return;
     try {
-      const res = await clientFetch(
-        `/api/quotes?universeMax=${TAIL_SYMBOL_INDEX - 1}&limit=200`,
-        { cache: "no-store" },
-      );
+      const res = await clientFetch(`/api/quotes?limit=500`, { cache: "no-store" });
       if (!res?.ok) return;
 
       const body = (await res.json()) as {
@@ -815,33 +812,7 @@ export default function HomePage() {
 
       applyQuotePayload(body.quotes ?? []);
     } catch {
-      // ignore head quote priming errors
-    }
-  }, [applyQuotePayload]);
-
-  const primeTailQuotes = useCallback(async () => {
-    if (isWorkerRateLimited()) return;
-    try {
-      const res = await clientFetch(
-        `/api/quotes?universeMin=${TAIL_SYMBOL_INDEX}&limit=500`,
-        { cache: "no-store" },
-      );
-      if (!res?.ok) return;
-
-      const body = (await res.json()) as {
-        quotes?: Array<{
-          symbol: string;
-          price: number | null;
-          dailyChange: number | null;
-          preMarketChange: number | null;
-          regularMarketChange: number | null;
-          postMarketChange: number | null;
-        }>;
-      };
-
-      applyQuotePayload(body.quotes ?? []);
-    } catch {
-      // ignore tail quote priming errors
+      // ignore quote priming errors
     }
   }, [applyQuotePayload]);
 
@@ -948,16 +919,9 @@ export default function HomePage() {
 
   useEffect(() => {
     if (!data || data.cacheEmpty) return;
-    const headTimer = setTimeout(() => void primeHeadQuotes(), INITIAL_QUOTES_DELAY_MS);
-    const tailTimer = setTimeout(
-      () => void primeTailQuotes(),
-      INITIAL_QUOTES_DELAY_MS + 8_000,
-    );
-    return () => {
-      clearTimeout(headTimer);
-      clearTimeout(tailTimer);
-    };
-  }, [data?.cacheEmpty, data?.scannedAt, primeHeadQuotes, primeTailQuotes]);
+    const timer = setTimeout(() => void primeAllQuotes(), INITIAL_QUOTES_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [data?.cacheEmpty, data?.scannedAt, primeAllQuotes]);
 
   useEffect(() => {
     if (newsPollRef.current) clearInterval(newsPollRef.current);

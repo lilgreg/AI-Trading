@@ -3,6 +3,7 @@ import { dailyChangeForScanRow } from "./daily-change";
 import { formatMsAgo } from "./ema";
 import { normalizeCrossover } from "./normalize-scan-result";
 import type { StockScanResult } from "./types";
+import { getYahooCached, setYahooCached } from "./yahoo-cache";
 
 const yahooFinance = new YahooFinance({ suppressNotices: ["yahooSurvey"] });
 
@@ -64,6 +65,12 @@ async function fetchSymbolNews(
   const symbol = row.symbol;
   const displayTicker = row.displayTicker ?? symbol;
 
+  type CachedNews = Omit<NewsHeadline, "msAgo" | "timeAgo">[];
+  const cached = await getYahooCached<CachedNews>("news", symbol);
+  if (cached) {
+    return cached.map((item) => ({ ...item, dailyChange }));
+  }
+
   try {
     const result = await withTimeout(
       yahooFinance.search(symbol, { quotesCount: 1, newsCount: NEWS_PER_SYMBOL }),
@@ -72,7 +79,7 @@ async function fetchSymbolNews(
     );
 
     const now = Date.now();
-    return (result.news ?? [])
+    const headlines = (result.news ?? [])
       .filter((item) => item.title && item.link)
       .map((item) => {
         const published =
@@ -100,6 +107,9 @@ async function fetchSymbolNews(
           msAgo: Math.max(0, now - new Date(publishedAt).getTime()),
         };
       });
+
+    await setYahooCached("news", symbol, headlines);
+    return headlines;
   } catch {
     return [];
   }
