@@ -26,12 +26,34 @@ import {
   scheduleBackgroundTask,
   scheduleScanJob,
 } from "@/lib/scan-scheduler";
-import { enrichSnapshotSessions } from "@/lib/session-snapshot";
+import { applyQuoteUpdates } from "@/lib/quote-updates";
+import { fetchQuoteUpdates } from "@/lib/quotes";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
-const SYNC_RETRY_FAILED_LIMIT = 25;
+const WORKERS_QUOTE_ENRICH_LIMIT = 20;
+
+async function enrichScanResponseQuotes(
+  snapshot: ScanSnapshot | null,
+): Promise<ScanSnapshot | null> {
+  if (!snapshot?.results?.length) return snapshot;
+
+  const nullPriceCount = snapshot.results.filter((row) => row.price == null).length;
+  if (nullPriceCount / snapshot.results.length < 0.05) return snapshot;
+
+  const symbols = snapshot.results.map((row) => row.symbol);
+  const quotes = await fetchQuoteUpdates(symbols, {
+    offset: 0,
+    limit: WORKERS_QUOTE_ENRICH_LIMIT,
+  });
+  if (!quotes.length) return snapshot;
+
+  return {
+    ...snapshot,
+    results: applyQuoteUpdates(snapshot.results, quotes),
+  };
+}
 const HEAL_MAX_SYMBOLS = 12;
 const HEAL_MAX_ROUNDS = 1;
 const SESSION_ENRICH_MAX = 40;
@@ -257,6 +279,12 @@ export async function GET(request: NextRequest) {
           await sleep(2_000);
         }
       });
+    }
+
+    try {
+      responseSnapshot = await enrichScanResponseQuotes(responseSnapshot);
+    } catch {
+      // best-effort quote enrich for table display
     }
 
     return NextResponse.json(
