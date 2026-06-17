@@ -306,44 +306,81 @@ export async function GET(request: NextRequest) {
     }
 
     let responseSnapshot = snapshot;
-    const shouldInlineHeal =
-      snapshot &&
-      (hasUnscanned ||
-        hasStaleChartRows ||
-        (heal && hasCross4hGaps));
-    if (shouldInlineHeal && (heal || hasUnscanned || hasStaleChartRows)) {
-      try {
-        responseSnapshot =
-          (await healCacheOnRead(snapshot, {}, { maxSymbols: 4 })) ?? snapshot;
-      } catch {
-        // return cached snapshot if inline heal fails
+
+    if (heal) {
+      const shouldInlineHeal =
+        snapshot &&
+        (hasUnscanned || hasStaleChartRows || hasCross4hGaps);
+      if (shouldInlineHeal) {
+        try {
+          responseSnapshot =
+            (await healCacheOnRead(snapshot, {}, { maxSymbols: 4 })) ?? snapshot;
+        } catch {
+          // return cached snapshot if inline heal fails
+        }
       }
-    }
 
-    scheduleCross4hGapHeal(responseSnapshot);
+      scheduleCross4hGapHeal(responseSnapshot);
 
-    if (heal && responseSnapshot?.results?.length && hasUnscannedRows(responseSnapshot.results)) {
+      if (responseSnapshot?.results?.length && hasUnscannedRows(responseSnapshot.results)) {
+        scheduleBackgroundTask(async () => {
+          const { sleep } = await import("@/lib/request-limit");
+          for (let round = 0; round < 8; round += 1) {
+            const fresh = await loadSnapshot({ enrich: false });
+            if (!fresh?.results?.length || !hasUnscannedRows(fresh.results)) break;
+            try {
+              await healCacheOnRead(fresh, {}, { maxSymbols: 4 });
+            } catch {
+              break;
+            }
+            await sleep(2_000);
+          }
+        });
+      }
+
+      try {
+        responseSnapshot = await enrichScanResponseQuotes(responseSnapshot, {
+          persist: true,
+        });
+      } catch {
+        // best-effort quote enrich for table display
+      }
+    } else if (needsHeal) {
       scheduleBackgroundTask(async () => {
         const { sleep } = await import("@/lib/request-limit");
-        for (let round = 0; round < 8; round += 1) {
-          const fresh = await loadSnapshot({ enrich: false });
-          if (!fresh?.results?.length || !hasUnscannedRows(fresh.results)) break;
-          try {
-            await healCacheOnRead(fresh, {}, { maxSymbols: 4 });
-          } catch {
-            break;
+        try {
+          let current = await loadSnapshot({ enrich: false });
+          if (!current?.results?.length) return;
+          if (countCross4hGapRows(current.results) > 0) {
+            for (let round = 0; round < 12; round += 1) {
+              if (!current?.results?.length || countCross4hGapRows(current.results) === 0) {
+                break;
+              }
+              await healCacheOnRead(current, {}, { maxSymbols: 4 });
+              await sleep(2_000);
+              current = await loadSnapshot({ enrich: false });
+            }
           }
-          await sleep(2_000);
+          const nullPriceSymbols =
+            current?.results?.filter((row) => row.price == null && !row.error) ?? [];
+          if (nullPriceSymbols.length > 0) {
+            const quotes = await fetchQuoteUpdates(
+              nullPriceSymbols.map((row) => row.symbol),
+              { offset: 0, limit: WORKERS_QUOTE_ENRICH_LIMIT },
+            );
+            if (quotes.length && current) {
+              const results = applyQuoteUpdates(current.results, quotes);
+              await saveSnapshot({
+                ...current,
+                results,
+                lastSavedAt: new Date().toISOString(),
+              });
+            }
+          }
+        } catch {
+          // best-effort background maintenance
         }
       });
-    }
-
-    try {
-      responseSnapshot = await enrichScanResponseQuotes(responseSnapshot, {
-        persist: heal,
-      });
-    } catch {
-      // best-effort quote enrich for table display
     }
 
     return NextResponse.json(

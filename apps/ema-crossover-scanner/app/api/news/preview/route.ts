@@ -73,6 +73,25 @@ function extractJsonLdText(html: string): string | null {
 }
 
 /** Pull paragraph text from article/main content regions. */
+function extractYahooNextArticleBody(html: string): string | null {
+  const match = html.match(
+    /<script id=["']__NEXT_DATA__["'][^>]*>([\s\S]*?)<\/script>/i,
+  );
+  if (!match) return null;
+
+  try {
+    const parsed = JSON.parse(match[1]) as unknown;
+    const str = JSON.stringify(parsed);
+    const bodyMatch = str.match(/"articleBody"\s*:\s*"((?:\\.|[^"\\])*)"/);
+    if (!bodyMatch) return null;
+    const decoded = JSON.parse(`"${bodyMatch[1]}"`) as string;
+    const text = stripHtml(decodeHtmlEntities(decoded));
+    return text.length > 80 ? text : null;
+  } catch {
+    return null;
+  }
+}
+
 function extractArticleParagraphs(html: string): string | null {
   const regionPattern =
     /<(article|main|div)[^>]*(?:class|id)=["'][^"']*(?:article|story|content|post-body|entry-content)[^"']*["'][^>]*>([\s\S]*?)<\/\1>/gi;
@@ -156,6 +175,7 @@ export async function GET(request: Request) {
 
     const summary = longestText(
       metaSummary ? decodeHtmlEntities(metaSummary) : null,
+      extractYahooNextArticleBody(html),
       extractJsonLdText(html),
       extractArticleParagraphs(html),
     );

@@ -7,6 +7,7 @@ import {
   getUsMarketSession,
 } from "./market-session";
 import { retryWithBackoff, sleep, yahooLimiter } from "./request-limit";
+import { resolveYahooChartSymbol } from "./stocks";
 
 const yahooFinance = new YahooFinance({ suppressNotices: ["yahooSurvey"] });
 
@@ -590,7 +591,7 @@ function parseQuoteMetaFromRecord(raw: Record<string, unknown>): {
 }
 
 /** Lightweight v8 chart meta — works when yahoo-finance2 quote is throttled. */
-async function fetchQuoteMetaViaV8Chart(symbol: string): Promise<
+async function fetchQuoteMetaViaV8Chart(rawSymbol: string): Promise<
   | ({
       name: string | null;
       price: number | null;
@@ -600,6 +601,7 @@ async function fetchQuoteMetaViaV8Chart(symbol: string): Promise<
     } & QuoteSessionChanges)
   | null
 > {
+  const symbol = resolveYahooChartSymbol(rawSymbol);
   const url = new URL(
     `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}`,
   );
@@ -694,17 +696,18 @@ const EMPTY_QUOTE_META = {
   postMarketChange: null,
 } as const;
 
-export async function fetchQuoteMeta(symbol: string): Promise<{
+export async function fetchQuoteMeta(rawSymbol: string): Promise<{
   name: string | null;
   price: number | null;
   exchange: string | null;
   quoteExchange: string | null;
   dailyChange: number | null;
 } & QuoteSessionChanges> {
+  const symbol = resolveYahooChartSymbol(rawSymbol);
   // Direct v8 HTTP first — avoids yahoo-finance2 quote timeouts on tail symbols.
   try {
     const viaV8 = await yahooLimiter.run(() =>
-      fetchQuoteMetaViaV8Chart(symbol),
+      fetchQuoteMetaViaV8Chart(rawSymbol),
     );
     if (viaV8) return viaV8;
   } catch {

@@ -1,5 +1,6 @@
 import type { SessionChanges } from "./market-session";
 import { getUsMarketSession } from "./market-session";
+import { resolveYahooChartSymbol } from "./stocks";
 import type { StockScanResult } from "./types";
 import { YAHOO_CHART_TIMEOUT_MS } from "./yahoo";
 
@@ -69,8 +70,9 @@ function parseIntradayBars(body: {
  * Used overnight when live quote fields are null.
  */
 export async function fetchSessionChangesFromChart(
-  symbol: string,
+  rawSymbol: string,
 ): Promise<SessionChanges | null> {
+  const symbol = resolveYahooChartSymbol(rawSymbol);
   const url = new URL(
     `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}`,
   );
