@@ -269,7 +269,7 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    if (responseSnapshot?.results?.length && hasUnscannedRows(responseSnapshot.results)) {
+    if (heal && responseSnapshot?.results?.length && hasUnscannedRows(responseSnapshot.results)) {
       scheduleBackgroundTask(async () => {
         const { sleep } = await import("@/lib/request-limit");
         for (let round = 0; round < 8; round += 1) {
