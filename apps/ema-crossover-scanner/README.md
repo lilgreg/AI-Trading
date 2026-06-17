@@ -197,14 +197,18 @@ Preview cron locally: `wrangler dev --test-scheduled` then `curl "http://localho
 ### Deploy
 
 ```bash
-npm run deploy
-```
+Or push to `main` — **GitHub Actions** deploys automatically (see [docs/CLOUDFLARE_DEPLOY.md](../../docs/CLOUDFLARE_DEPLOY.md)).
 
-Or connect GitHub in the [Cloudflare dashboard](https://dash.cloudflare.com/) — build command: `npm run deploy`, root: `apps/ema-crossover-scanner`.
+Local manual deploy:
+
+```bash
+npm run pages:build
+npx opennextjs-cloudflare deploy
+```
 
 ### Cron schedule
 
-Defined in `wrangler.jsonc` → `custom-worker.ts` (direct `runScanChunk`, not HTTP):
+Defined in `wrangler.toml` → `custom-worker.ts` (direct `runScanChunk`, not HTTP):
 
 | Cron (UTC) | Chunk |
 |------------|-------|
@@ -220,9 +224,10 @@ Manual HTTP trigger (optional): `curl -H "Authorization: Bearer $CRON_SECRET" ht
 - [ ] R2 bucket created + `R2_*` secrets set on worker
 - [ ] `TRADINGVIEW_WATCHLIST_URL` set
 - [ ] **`FINNHUB_API_KEY` set** (backup when Yahoo throttles after ~120 symbols)
-- [ ] Cron triggers enabled (four nightly jobs in `wrangler.jsonc`)
-- [ ] **Paid Workers plan recommended** for long HTTP scans (`limits.cpu_ms` up to 300000 in `wrangler.jsonc`); free tier HTTP limit is ~30s
-- [ ] `nodejs_compat` enabled (set in `wrangler.jsonc`)
+- [ ] Cron triggers enabled (four nightly jobs in `wrangler.toml`)
+- [ ] **Paid Workers plan recommended** for long HTTP scans (`cpu_ms` up to 300000 in `wrangler.toml`); free tier HTTP limit is ~30s
+- [ ] `nodejs_compat` enabled (set in `wrangler.toml`)
+- [ ] GitHub Actions secrets configured (see `docs/CLOUDFLARE_DEPLOY.md`)
 
 ### Runtime limits
 

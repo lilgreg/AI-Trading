@@ -1,0 +1,159 @@
+# Deploy apps/ema-crossover-scanner (Next.js + OpenNext) to Cloudflare Workers on push to main.
+#
+# Production build uses Webpack (next build --webpack). Next.js 16 defaults to Turbopack,
+# which causes ChunkLoadError on Workers — see docs/CLOUDFLARE_DEPLOY.md.
+#
+# Required GitHub repository secrets:
+#   CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID
+#   R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME
+#   TRADINGVIEW_WATCHLIST_URL, FINNHUB_API_KEY
+#
+# Optional:
+#   CRON_SECRET, POLYGON_API_KEY, TWELVE_DATA_API_KEY, ALPHA_VANTAGE_API_KEY, FMP_API_KEY
+#   NEXT_PUBLIC_NEWS_POLL_MS, NEXT_PUBLIC_SITE_URL
+
+name: Deploy to Cloudflare Workers
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/ema-crossover-scanner/**"
+      - ".github/workflows/deploy-cloudflare.yml"
+      - "docs/CLOUDFLARE_DEPLOY.md"
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-cloudflare-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: apps/ema-crossover-scanner
+
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+      TRADINGVIEW_WATCHLIST_URL: ${{ secrets.TRADINGVIEW_WATCHLIST_URL }}
+      FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+      CRON_SECRET: ${{ secrets.CRON_SECRET }}
+      POLYGON_API_KEY: ${{ secrets.POLYGON_API_KEY }}
+      TWELVE_DATA_API_KEY: ${{ secrets.TWELVE_DATA_API_KEY }}
+      ALPHA_VANTAGE_API_KEY: ${{ secrets.ALPHA_VANTAGE_API_KEY }}
+      FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
+      NEXT_PUBLIC_NEWS_POLL_MS: ${{ secrets.NEXT_PUBLIC_NEWS_POLL_MS }}
+      NEXT_PUBLIC_SITE_URL: ${{ secrets.NEXT_PUBLIC_SITE_URL }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate required secrets
+        run: |
+          missing=0
+          for name in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID R2_ACCOUNT_ID R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY R2_BUCKET_NAME TRADINGVIEW_WATCHLIST_URL FINNHUB_API_KEY; do
+            if [ -z "${!name}" ]; then
+              echo "::error title=Missing secret::$name is not set in GitHub repository secrets (Settings → Secrets and variables → Actions)."
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            echo "See docs/CLOUDFLARE_DEPLOY.md for setup steps."
+            exit 1
+          fi
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: apps/ema-crossover-scanner/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Ensure R2 buckets exist
+        run: |
+          for bucket in ai-trading-scanner-opennext-cache ai-trading-scanner; do
+            echo "Ensuring R2 bucket: $bucket"
+            if ! npx wrangler r2 bucket create "$bucket" 2>&1; then
+              echo "Bucket $bucket already exists or create skipped."
+            fi
+          done
+
+      - name: Verify Cloudflare credentials
+        run: npx wrangler whoami
+
+      - name: Inject Worker public vars into wrangler.toml
+        run: node scripts/inject-wrangler-vars.mjs
+
+      - name: Sync Worker secrets
+        run: |
+          {
+            [ -n "$R2_ACCOUNT_ID" ] && echo "R2_ACCOUNT_ID=$R2_ACCOUNT_ID"
+            [ -n "$R2_ACCESS_KEY_ID" ] && echo "R2_ACCESS_KEY_ID=$R2_ACCESS_KEY_ID"
+            [ -n "$R2_SECRET_ACCESS_KEY" ] && echo "R2_SECRET_ACCESS_KEY=$R2_SECRET_ACCESS_KEY"
+            [ -n "$R2_BUCKET_NAME" ] && echo "R2_BUCKET_NAME=$R2_BUCKET_NAME"
+            [ -n "$TRADINGVIEW_WATCHLIST_URL" ] && echo "TRADINGVIEW_WATCHLIST_URL=$TRADINGVIEW_WATCHLIST_URL"
+            [ -n "$FINNHUB_API_KEY" ] && echo "FINNHUB_API_KEY=$FINNHUB_API_KEY"
+            [ -n "$CRON_SECRET" ] && echo "CRON_SECRET=$CRON_SECRET"
+            [ -n "$POLYGON_API_KEY" ] && echo "POLYGON_API_KEY=$POLYGON_API_KEY"
+            [ -n "$TWELVE_DATA_API_KEY" ] && echo "TWELVE_DATA_API_KEY=$TWELVE_DATA_API_KEY"
+            [ -n "$ALPHA_VANTAGE_API_KEY" ] && echo "ALPHA_VANTAGE_API_KEY=$ALPHA_VANTAGE_API_KEY"
+            [ -n "$FMP_API_KEY" ] && echo "FMP_API_KEY=$FMP_API_KEY"
+          } > .dev.vars.ci
+          npx wrangler secret bulk .dev.vars.ci
+          rm -f .dev.vars.ci
+
+      - name: Build Next.js app (Webpack)
+        run: npm run build
+
+      - name: Bundle OpenNext worker
+        run: npm run build:worker
+
+      - name: Deploy to Cloudflare Workers
+        run: npx opennextjs-cloudflare deploy
+
+      - name: Smoke test workers.dev
+        id: smoke
+        continue-on-error: true
+        env:
+          WORKER_NAME: ai-trading-scanner
+        run: |
+          subdomain=$(npx wrangler whoami 2>/dev/null | sed -n 's/.*workers.dev subdomain: \([^ ]*\).*/\1/p' || true)
+          if [ -n "$subdomain" ]; then
+            url="https://${WORKER_NAME}.${subdomain}.workers.dev"
+          else
+            url="https://${WORKER_NAME}.workers.dev"
+          fi
+          echo "Smoke test URL: $url"
+          for i in 1 2 3 4 5; do
+            code=$(curl -s -o /dev/null -w "%{http_code}" "$url" || true)
+            echo "Attempt $i: HTTP $code"
+            if [ "$code" = "200" ]; then
+              echo "smoke_ok=true" >> "$GITHUB_OUTPUT"
+              echo "smoke_url=$url" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::warning title=Smoke test failed::Site did not return HTTP 200 at $url. Deploy succeeded; check wrangler tail ai-trading-scanner."
+          echo "smoke_ok=false" >> "$GITHUB_OUTPUT"
+          exit 1
+
+      - name: Smoke test summary
+        if: always() && steps.smoke.outcome != 'skipped'
+        run: |
+          if [ "${{ steps.smoke.outputs.smoke_ok }}" = "true" ]; then
+            echo "Smoke test passed at ${{ steps.smoke.outputs.smoke_url }}."
+          else
+            echo "::notice::Deploy uploaded successfully but smoke test did not get HTTP 200. See docs/CLOUDFLARE_DEPLOY.md troubleshooting."
+          fi

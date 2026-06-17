@@ -1,0 +1,47 @@
+name = "ai-trading-scanner"
+main = "./custom-worker.ts"
+compatibility_date = "2026-06-16"
+compatibility_flags = ["nodejs_compat", "global_fetch_strictly_public"]
+workers_dev = true
+
+# Custom domains are NOT declared here — attach in dashboard:
+# Workers & Pages → ai-trading-scanner → Settings → Domains & Routes → Add custom domain.
+# See docs/CLOUDFLARE_DEPLOY.md
+
+[assets]
+directory = ".open-next/assets"
+binding = "ASSETS"
+
+[[services]]
+binding = "WORKER_SELF_REFERENCE"
+service = "ai-trading-scanner"
+
+# OpenNext incremental cache (SSR/page cache) — required for production deploys.
+[[r2_buckets]]
+binding = "NEXT_INC_CACHE_R2_BUCKET"
+bucket_name = "ai-trading-scanner-opennext-cache"
+
+# Scan snapshot bucket (app reads/writes via S3 API + R2_* secrets).
+[[r2_buckets]]
+binding = "SCAN_CACHE_R2_BUCKET"
+bucket_name = "ai-trading-scanner"
+
+[triggers]
+crons = [
+  "0 0 * * *",
+  "5 0 * * *",
+  "10 0 * * *",
+  "15 0 * * *",
+]
+
+# Paid Workers: extend CPU for long scan API routes (up to 300s). Free tier: ~30s HTTP limit.
+# [limits]
+# cpu_ms = 300000
+
+[observability]
+enabled = true
+head_sampling_rate = 1
+
+# Public runtime vars — CI injects before deploy (see deploy-cloudflare.yml).
+[vars]
+NEXT_PUBLIC_NEWS_POLL_MS = "20000"

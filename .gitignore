@@ -27,6 +27,7 @@ next-env.d.ts
 
 # vercel
 .vercel
+.wrangler/
 
 # python
 __pycache__/
