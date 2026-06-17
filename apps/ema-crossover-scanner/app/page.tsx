@@ -451,9 +451,15 @@ export default function HomePage() {
         throw new Error(body.error ?? `Rescan failed (${res.status})`);
       }
       const json = normalizeCachedResponse(
-        (await res.json()) as Partial<CachedScanResponse>,
+        (await res.json()) as Partial<CachedScanResponse> & { message?: string },
       );
-      setData((prev) => applyScanPayload(json, prev));
+      setData((prev) => {
+        const next = applyScanPayload(json, prev);
+        if (json.message === "Rescan started" && next) {
+          return { ...next, scanInProgress: true };
+        }
+        return next;
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Rescan failed");
     } finally {

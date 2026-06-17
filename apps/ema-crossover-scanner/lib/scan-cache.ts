@@ -1,5 +1,6 @@
 import { sanitizeScanResults } from "./chart-error-sanitize";
 import { normalizeCachedResponse } from "./normalize-scan-result";
+import { isCloudflareWorkersRuntime } from "./runtime";
 import { isExcludedSymbol } from "./stocks";
 import {
   formatStorageError,
@@ -125,6 +126,14 @@ const LOCK_TTL_MS = 15 * 60 * 1000;
 const EMPTY_CACHE_LOCK_GRACE_MS = 2 * 60 * 1000;
 /** Release orphan locks after long scan timeout + buffer (Vercel 300s / CF scheduled up to 15m). */
 const ORPHAN_SCAN_LOCK_MS = 6 * 60 * 1000;
+/** Workers free tier HTTP ~30s — recover stuck locks sooner between chunk runs. */
+const ORPHAN_SCAN_LOCK_MS_CF = 2 * 60 * 1000;
+
+function getOrphanScanLockMs(): number {
+  return isCloudflareWorkersRuntime()
+    ? ORPHAN_SCAN_LOCK_MS_CF
+    : ORPHAN_SCAN_LOCK_MS;
+}
 
 async function readScanLock(): Promise<ScanLock | null> {
   const storage = getScanStorage();
@@ -161,7 +170,7 @@ export async function recoverStuckScanState(
   }
 
   // Serverless scan timed out without releasing lock in finally.
-  if (lockAge >= ORPHAN_SCAN_LOCK_MS) {
+  if (lockAge >= getOrphanScanLockMs()) {
     await releaseScanLock();
   }
 }

@@ -24,6 +24,7 @@ import {
   tryAcquireScanLock,
   type ScanSnapshot,
 } from "./scan-cache";
+import { scheduleScanJob } from "./scan-scheduler";
 import { stripDisplayTicker, resolveTradingViewSymbol } from "./stocks";
 import { buildSymbolUniverse } from "./symbols";
 import type { ParsedSymbol, StockScanResult } from "./types";
@@ -334,6 +335,7 @@ export async function runScanChunk(
   offset: number,
   limit: number,
   overrides: Partial<ScanJobConfig> = {},
+  options: { force?: boolean } = {},
 ): Promise<ScanSnapshot | null> {
   const acquired = await tryAcquireScanLock();
   if (!acquired) return null;
@@ -352,6 +354,7 @@ export async function runScanChunk(
     );
 
     return await mergeScanResults(overrides, {
+      rescanAll: options.force === true,
       symbolFilter: (parsed) => slice.has(parsed.yahoo),
     });
   } catch (err) {
@@ -729,7 +732,7 @@ export async function ensureFreshScan(
     return false;
   }
 
-  void runBackgroundScan(overrides, options).catch(() => undefined);
+  scheduleScanJob(overrides, options);
   return true;
 }
 

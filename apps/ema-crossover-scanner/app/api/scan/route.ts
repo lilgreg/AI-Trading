@@ -18,9 +18,9 @@ import {
   hasUnscannedRows,
   healCacheOnRead,
   retryFailedSymbols,
-  runBackgroundScan,
   scanAndMergeSymbol,
 } from "@/lib/scan-job";
+import { scheduleScanJob } from "@/lib/scan-scheduler";
 import { enrichSnapshotSessions } from "@/lib/session-snapshot";
 
 export const dynamic = "force-dynamic";
@@ -101,7 +101,25 @@ export async function GET(request: NextRequest) {
   }
 
   if (force) {
-    void ensureFreshScan({}, { force: true });
+    if (status.scanInProgress) {
+      return NextResponse.json(
+        {
+          ...toCachedResponse(snapshot, status),
+          message: "Scan already in progress",
+        },
+        { headers: { "Cache-Control": "no-store" } },
+      );
+    }
+
+    scheduleScanJob({}, { force: true });
+    status = await buildCacheStatus(snapshot);
+    return NextResponse.json(
+      {
+        ...toCachedResponse(snapshot, status),
+        message: "Rescan started",
+      },
+      { headers: { "Cache-Control": "no-store" } },
+    );
   } else if (status.cacheEmpty) {
     void ensureFreshScan({});
   } else if (status.stale && !hasUnscanned) {
@@ -190,7 +208,7 @@ export async function GET(request: NextRequest) {
 export async function POST(_request: NextRequest) {
   const snapshot = await loadSnapshot();
   await recoverStuckScanState(snapshot);
-  const status = await buildCacheStatus(snapshot);
+  let status = await buildCacheStatus(snapshot);
 
   if (status.scanInProgress) {
     return NextResponse.json({
@@ -199,15 +217,17 @@ export async function POST(_request: NextRequest) {
     });
   }
 
-  try {
-    const updated = await runBackgroundScan({}, { force: true });
-    const freshStatus = await buildCacheStatus(updated);
-    return NextResponse.json(toCachedResponse(updated, freshStatus));
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "Scan failed";
-    return NextResponse.json(
-      { error: message, ...toCachedResponse(snapshot, status) },
-      { status: 500 },
-    );
-  }
+  scheduleScanJob({}, { force: true });
+  status = await buildCacheStatus(snapshot);
+
+  return NextResponse.json(
+    {
+      ...toCachedResponse(snapshot, status),
+      message: "Rescan started",
+    },
+    {
+      status: 202,
+      headers: { "Cache-Control": "no-store" },
+    },
+  );
 }
