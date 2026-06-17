@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { Agent, fetch as undiciFetch } from "undici";
+import { isCloudflareWorkersRuntime } from "@/lib/runtime";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 15;
@@ -81,17 +82,65 @@ function extractYahooNextArticleBody(html: string): string | null {
 
   try {
     const parsed = JSON.parse(match[1]) as unknown;
-    const str = JSON.stringify(parsed);
-    const bodyMatch = str.match(/"articleBody"\s*:\s*"((?:\\.|[^"\\])*)"/);
-    if (!bodyMatch) return null;
-    const decoded = JSON.parse(`"${bodyMatch[1]}"`) as string;
-    const text = stripHtml(decodeHtmlEntities(decoded));
-    return text.length > 80 ? text : null;
+    const bodyKeys = new Set(["articleBody", "description", "summary"]);
+    let best = "";
+    const walk = (node: unknown): void => {
+      if (node == null) return;
+      if (Array.isArray(node)) {
+        for (const item of node) walk(item);
+        return;
+      }
+      if (typeof node !== "object") return;
+      for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+        if (bodyKeys.has(key) && typeof value === "string") {
+          const text = stripHtml(decodeHtmlEntities(value));
+          if (text.length > best.length) best = text;
+        }
+        walk(value);
+      }
+    };
+    walk(parsed);
+    return best.length > 80 ? best : null;
   } catch {
     return null;
   }
 }
 
+const PREVIEW_HEADERS = {
+  "User-Agent": PREVIEW_USER_AGENT,
+  Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+  "Accept-Language": "en-US,en;q=0.9",
+  Referer: "https://finance.yahoo.com/",
+};
+
+async function fetchPreviewHtml(url: string): Promise<string | null> {
+  if (isCloudflareWorkersRuntime()) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), PREVIEW_TIMEOUT_MS);
+    try {
+      const res = await fetch(url, {
+        headers: PREVIEW_HEADERS,
+        redirect: "follow",
+        signal: controller.signal,
+        cache: "no-store",
+      });
+      if (!res.ok) return null;
+      return await res.text();
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  const res = await undiciFetch(url, {
+    dispatcher: previewFetchAgent,
+    headers: PREVIEW_HEADERS,
+    redirect: "follow",
+  });
+  if (!res.ok) return null;
+  return res.text();
+}
+
+/** Pull paragraph text from article/main content regions. */
 function extractArticleParagraphs(html: string): string | null {
   const regionPattern =
     /<(article|main|div)[^>]*(?:class|id)=["'][^"']*(?:article|story|content|post-body|entry-content)[^"']*["'][^>]*>([\s\S]*?)<\/\1>/gi;
@@ -151,21 +200,11 @@ export async function GET(request: Request) {
   }
 
   try {
-    const res = await undiciFetch(target.toString(), {
-      dispatcher: previewFetchAgent,
-      headers: {
-        "User-Agent": PREVIEW_USER_AGENT,
-        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-      },
-      redirect: "follow",
-    });
-
-    if (!res.ok) {
+    const html = await fetchPreviewHtml(target.toString());
+    if (!html) {
       return NextResponse.json({ summary: null });
     }
 
-    const html = await res.text();
     const metaSummary = longestText(
       extractMetaContent(html, "property", "og:description"),
       extractMetaContent(html, "name", "description"),
