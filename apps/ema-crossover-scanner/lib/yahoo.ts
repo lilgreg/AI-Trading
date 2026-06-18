@@ -847,6 +847,43 @@ export async function fetchBatchQuoteMeta(
   return out;
 }
 
+function mergeV8SessionIntoMeta(meta: QuoteMeta, viaV8: QuoteMeta): QuoteMeta {
+  return {
+    ...meta,
+    price: viaV8.price ?? meta.price,
+    dailyChange: viaV8.dailyChange ?? meta.dailyChange,
+    preMarketChange: viaV8.preMarketChange ?? meta.preMarketChange,
+    regularMarketChange: viaV8.regularMarketChange ?? meta.regularMarketChange,
+    postMarketChange: viaV8.postMarketChange ?? meta.postMarketChange,
+    name: viaV8.name ?? meta.name,
+    exchange: viaV8.exchange ?? meta.exchange,
+    quoteExchange: viaV8.quoteExchange ?? meta.quoteExchange,
+  };
+}
+
+async function loadV8QuoteMeta(
+  rawSymbol: string,
+  refresh: boolean,
+): Promise<QuoteMeta | null> {
+  const symbol = resolveYahooChartSymbol(rawSymbol);
+  if (!refresh) {
+    const cached = await getYahooCached<QuoteMeta>("quote-v8", symbol);
+    if (cached) return cached;
+  }
+  try {
+    const viaV8 = await yahooLimiter.run(() =>
+      fetchQuoteMetaViaV8Chart(rawSymbol),
+    );
+    if (viaV8) {
+      await setYahooCached("quote-v8", symbol, viaV8);
+      return viaV8;
+    }
+  } catch {
+    // fall through
+  }
+  return null;
+}
+
 export async function fetchQuoteMeta(
   rawSymbol: string,
   options: { refreshSession?: boolean } = {},
@@ -860,36 +897,16 @@ export async function fetchQuoteMeta(
   }
 
   const batch = await fetchBatchQuoteMeta([rawSymbol]);
-  let meta = batch.get(rawSymbol);
+  let meta = batch.get(rawSymbol) ?? { ...EMPTY_QUOTE_META };
 
-  const needsV8 =
-    options.refreshSession ||
-    !meta ||
-    meta.price == null ||
-    meta.regularMarketChange == null;
-
-  if (needsV8) {
-    const cachedV8 = options.refreshSession
-      ? null
-      : await getYahooCached<QuoteMeta>("quote-v8", symbol);
-    const viaV8 =
-      cachedV8 ??
-      (await yahooLimiter.run(() => fetchQuoteMetaViaV8Chart(rawSymbol)));
-    if (viaV8) {
-      meta = {
-        ...(meta ?? { ...EMPTY_QUOTE_META }),
-        ...viaV8,
-        name: viaV8.name ?? meta?.name ?? null,
-        exchange: viaV8.exchange ?? meta?.exchange ?? null,
-        quoteExchange: viaV8.quoteExchange ?? meta?.quoteExchange ?? null,
-      };
-      await setYahooCached("quote-v8", symbol, viaV8);
-      await setYahooCached("quote", symbol, meta);
-      return meta;
-    }
+  const viaV8 = await loadV8QuoteMeta(rawSymbol, options.refreshSession === true);
+  if (viaV8) {
+    meta = mergeV8SessionIntoMeta(meta, viaV8);
+    await setYahooCached("quote", symbol, meta);
+    return meta;
   }
 
-  if (meta && meta.price != null) return meta;
+  if (meta.price != null) return meta;
 
   const cachedV8 = await getYahooCached<QuoteMeta>("quote-v8", symbol);
   if (cachedV8) {
