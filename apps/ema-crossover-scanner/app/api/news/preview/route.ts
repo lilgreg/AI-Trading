@@ -49,18 +49,47 @@ function stripHtml(value: string): string {
 const BOILERPLATE_RE =
   /^(skip to navigation|yahoo finance is not a broker|the above button links|sign in to view)/i;
 const AFFILIATE_RE =
-  /coinbase|broker-dealer|cryptocurrencies for sale|facilitate trading/i;
+  /coinbase|broker-dealer|cryptocurrencies for sale|facilitate trading|stocktwits|10m\+ investors|newsroom\[at\]/i;
+const FOOTER_START_RE =
+  /^(view comments|terms and privacy|recommended stories|related:|copyright ©|sign in to access|advertisement|portfolio\b)/i;
+const FOOTER_INLINE_RE =
+  /\b(Terms and Privacy Policy|Privacy Dashboard|Recommended Stories|Copyright ©|Sign in to access your portfolio|ADVERTISEMENT)\b/i;
+const TABLE_CELL_RE = /^(index|move|close|symbol|ticker)$/i;
+const TABLE_DATA_RE = /^-?\d+(\.\d+)?%$|^[\d,]+\.\d{2}$/;
 
 function isUsefulParagraph(text: string): boolean {
   if (text.length < 50) return false;
   if (BOILERPLATE_RE.test(text)) return false;
   if (AFFILIATE_RE.test(text)) return false;
+  if (FOOTER_START_RE.test(text)) return false;
+  if (FOOTER_INLINE_RE.test(text)) return false;
+  if (TABLE_CELL_RE.test(text)) return false;
+  if (TABLE_DATA_RE.test(text)) return false;
   if (/^skip to /i.test(text)) return false;
+  if (/has no position in any of the stocks/i.test(text)) return false;
   return true;
 }
 
+function trimFooterJunk(text: string): string {
+  const inline = text.search(FOOTER_INLINE_RE);
+  if (inline > 200) return text.slice(0, inline).trim();
+
+  const lines = text.split(/\n\n+/);
+  const kept: string[] = [];
+  for (const line of lines) {
+    if (FOOTER_START_RE.test(line.trim()) || FOOTER_INLINE_RE.test(line)) break;
+    kept.push(line);
+  }
+  return kept.join("\n\n").trim();
+}
+
 function joinUsefulParagraphs(parts: string[]): string {
-  return parts.filter(isUsefulParagraph).join("\n\n");
+  const kept: string[] = [];
+  for (const part of parts) {
+    if (FOOTER_START_RE.test(part.trim()) || FOOTER_INLINE_RE.test(part)) break;
+    if (isUsefulParagraph(part)) kept.push(part);
+  }
+  return trimFooterJunk(kept.join("\n\n"));
 }
 
 function extractCanonicalUrl(html: string): string | null {
@@ -171,6 +200,23 @@ async function fetchPreviewHtml(url: string): Promise<string | null> {
   return res.text();
 }
 
+function extractYahooTestIdArticleBody(html: string): string | null {
+  const match = html.match(
+    /data-testid=["']article-body["'][^>]*>([\s\S]*?)<\/div>\s*<\/div>\s*<div/i,
+  );
+  if (!match) return null;
+
+  const parts: string[] = [];
+  for (const p of match[1].matchAll(/<p[^>]*>([\s\S]*?)<\/p>/gi)) {
+    const text = stripHtml(decodeHtmlEntities(p[1]));
+    if (!text) continue;
+    if (FOOTER_START_RE.test(text.trim()) || FOOTER_INLINE_RE.test(text)) break;
+    if (text.length > 30) parts.push(text);
+  }
+  const combined = joinUsefulParagraphs(parts);
+  return combined.length > 80 ? combined : null;
+}
+
 function extractYahooCaasParagraphs(html: string): string | null {
   const caasMatch = html.match(
     /class=["'][^"']*caas-body[^"']*["'][^>]*>([\s\S]*?)<\/div>/i,
@@ -187,11 +233,14 @@ function extractYahooCaasParagraphs(html: string): string | null {
 }
 
 function extractArticleParagraphs(html: string): string | null {
+  const yahooBody = extractYahooTestIdArticleBody(html);
+  if (yahooBody && yahooBody.length >= 200) return yahooBody;
+
   const yahooCaas = extractYahooCaasParagraphs(html);
   if (yahooCaas && yahooCaas.length >= 200) return yahooCaas;
 
   const regionPattern =
-    /<(article|main|div)[^>]*(?:class|id)=["'][^"']*(?:article|story|content|post-body|entry-content)[^"']*["'][^>]*>([\s\S]*?)<\/\1>/gi;
+    /<(article|main|div)[^>]*(?:class|id|data-testid)=["'][^"']*(?:article-body|article|story|content|post-body|entry-content)[^"']*["'][^>]*>([\s\S]*?)<\/\1>/gi;
 
   let best = "";
   for (const match of html.matchAll(regionPattern)) {
@@ -200,25 +249,14 @@ function extractArticleParagraphs(html: string): string | null {
     const parts: string[] = [];
     for (const p of paragraphs) {
       const text = stripHtml(decodeHtmlEntities(p[1]));
+      if (FOOTER_START_RE.test(text.trim()) || FOOTER_INLINE_RE.test(text)) break;
       if (text.length > 40) parts.push(text);
     }
     const combined = joinUsefulParagraphs(parts);
     if (combined.length > best.length) best = combined;
   }
 
-  if (best.length < MIN_USEFUL_LEN) {
-    const allParagraphs = html.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/gi);
-    const parts: string[] = [];
-    for (const p of allParagraphs) {
-      const text = stripHtml(decodeHtmlEntities(p[1]));
-      if (text.length > 60) parts.push(text);
-      if (joinUsefulParagraphs(parts).length > MAX_SUMMARY_LEN) break;
-    }
-    const fallback = joinUsefulParagraphs(parts);
-    if (fallback.length > best.length) best = fallback;
-  }
-
-  return best || null;
+  return best || yahooBody || yahooCaas || null;
 }
 
 function longestText(...candidates: (string | null | undefined)[]): string | null {
@@ -266,11 +304,12 @@ function extractMetaSummary(html: string): string | null {
 
 /** Priority: article paragraphs > Yahoo __NEXT_DATA__ > JSON-LD > meta description. */
 function extractFullArticleText(html: string): string | null {
-  return longestText(
+  const text = longestText(
     extractArticleParagraphs(html),
     extractYahooNextArticleBody(html),
     extractJsonLdText(html),
   );
+  return text ? trimFooterJunk(text) : null;
 }
 
 async function fetchCanonicalArticleText(

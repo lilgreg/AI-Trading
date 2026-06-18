@@ -71,7 +71,7 @@ function formatScanDataAge(scannedAt: string | null): string {
   if (!scannedAt) return "never";
   const ms = Date.now() - new Date(scannedAt).getTime();
   if (ms < 60_000) return "just now";
-  return `${formatMsAgo(ms)} ago`;
+  return formatMsAgo(ms);
 }
 
 function SessionChangesCell({

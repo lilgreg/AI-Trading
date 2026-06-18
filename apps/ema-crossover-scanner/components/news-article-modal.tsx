@@ -31,6 +31,20 @@ function longestSummary(...candidates: (string | null | undefined)[]): string {
   return best;
 }
 
+function looksLikeFooterJunk(text: string): boolean {
+  return /\b(Terms and Privacy Policy|Recommended Stories|Sign in to access your portfolio|ADVERTISEMENT|Privacy Dashboard)\b/i.test(
+    text,
+  );
+}
+
+function pickBestSummary(...candidates: (string | null | undefined)[]): string {
+  const trimmed = candidates
+    .map((c) => c?.trim())
+    .filter((c): c is string => Boolean(c));
+  const clean = trimmed.filter((t) => !looksLikeFooterJunk(t));
+  return longestSummary(...(clean.length ? clean : trimmed));
+}
+
 function hasAdequateSummary(text: string | null | undefined): boolean {
   return Boolean(text?.trim() && text.trim().length >= ADEQUATE_SUMMARY_LEN);
 }
@@ -77,12 +91,12 @@ export function NewsArticleModal({ article, onClose }: NewsArticleModalProps) {
 
     const applyBest = (...candidates: (string | null | undefined)[]) => {
       if (cancelled) return;
-      setDisplaySummary((prev) => longestSummary(prev, ...candidates));
+      setDisplaySummary((prev) => pickBestSummary(prev, ...candidates));
     };
 
     const yahooSummary = article.summary?.trim() ?? "";
     const cachedPreview = getCachedNewsPreview(article.url);
-    const seed = longestSummary(yahooSummary, cachedPreview);
+    const seed = pickBestSummary(yahooSummary, cachedPreview);
     setDisplaySummary(seed);
     setPreviewPending(Boolean(article.url));
 
@@ -101,9 +115,9 @@ export function NewsArticleModal({ article, onClose }: NewsArticleModalProps) {
         if (cancelled) return;
         setPreviewPending(false);
         setDisplaySummary((prev) => {
-          const best = longestSummary(prev, yahooSummary);
+          const best = pickBestSummary(prev, yahooSummary);
           if (hasAdequateSummary(best)) return best;
-          return longestSummary(best, article.headline);
+          return pickBestSummary(best, article.headline);
         });
       }
     })();
@@ -116,7 +130,7 @@ export function NewsArticleModal({ article, onClose }: NewsArticleModalProps) {
 
   if (!article) return null;
 
-  const summaryText = longestSummary(
+  const summaryText = pickBestSummary(
     displaySummary,
     article.summary,
     !previewPending ? article.headline : null,
