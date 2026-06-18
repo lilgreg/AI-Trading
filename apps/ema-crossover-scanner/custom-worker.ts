@@ -1,7 +1,8 @@
 import { default as handler } from "./.open-next/worker.js";
+import { runChunkedScan } from "./lib/scan-scheduler";
 import { runScanChunk } from "./lib/scan-job";
 import { tryServeQuotesApi } from "./lib/worker-quotes-fast";
-import { tryServeScanApi } from "./lib/worker-scan-fast";
+import { tryServeScanApi, tryStartForceRescan } from "./lib/worker-scan-fast";
 import {
   guardWorkerRequest,
   recordGlobalRequest,
@@ -40,6 +41,33 @@ async function tryServeAsset(
   return null;
 }
 
+async function tryHandleForceRescan(
+  request: Request,
+  env: CloudflareEnv,
+  ctx: ExecutionContext,
+): Promise<Response | null> {
+  const url = new URL(request.url);
+  if (url.pathname !== "/api/scan") return null;
+  if (url.searchParams.get("force") !== "true") return null;
+  if (request.method !== "GET" && request.method !== "POST") return null;
+
+  const result = await tryStartForceRescan(env);
+  if (!result) return null;
+
+  if (result.started) {
+    ctx.waitUntil(
+      runChunkedScan({}, { force: true }).catch((err) => {
+        console.error("Force rescan failed:", err);
+      }),
+    );
+  }
+
+  return Response.json(result.payload, {
+    status: 202,
+    headers: { "Cache-Control": "no-store" },
+  });
+}
+
 /** Cron chunk schedule — small slices to stay under Workers subrequest limits. */
 const SCAN_CRON_CHUNKS: Record<string, { offset: number; limit: number }> = {
   "0 0 * * *": { offset: 0, limit: 12 },
@@ -52,6 +80,9 @@ export default {
   async fetch(request: Request, env: CloudflareEnv, ctx: ExecutionContext) {
     const asset = await tryServeAsset(request, env);
     if (asset) return asset;
+
+    const forceRescan = await tryHandleForceRescan(request, env, ctx);
+    if (forceRescan) return forceRescan;
 
     const scanApi = await tryServeScanApi(request, env);
     if (scanApi) return scanApi;

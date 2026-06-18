@@ -47,6 +47,18 @@ async function releaseScanLockR2(bucket: R2Bucket): Promise<void> {
   });
 }
 
+async function acquireScanLockR2(bucket: R2Bucket): Promise<ScanLock> {
+  const now = Date.now();
+  const lock: ScanLock = {
+    startedAt: new Date(now).toISOString(),
+    expiresAt: new Date(now + LOCK_TTL_MS).toISOString(),
+  };
+  await bucket.put(LOCK_KEY, JSON.stringify(lock), {
+    httpMetadata: { contentType: "application/json" },
+  });
+  return lock;
+}
+
 /** Inline recoverStuckScanState for R2 fast-path (no OpenNext / scan-cache import). */
 async function recoverOrphanScanLockR2(
   bucket: R2Bucket,
@@ -172,6 +184,46 @@ async function overlayLiveScanStatus(
   };
 }
 
+/** Start force rescan from custom-worker (avoids OpenNext waitUntil 1102). */
+async function tryStartForceRescan(
+  env: CloudflareEnv,
+): Promise<{ started: boolean; payload: Record<string, unknown> } | null> {
+  const bucket = env.SCAN_CACHE_R2_BUCKET;
+  if (!bucket) return null;
+
+  const metaObj = await bucket.get(META_KEY);
+  const meta = metaObj
+    ? ((await metaObj.json()) as { scannedAt?: string; symbolCount?: number })
+    : null;
+  const cacheEmpty = meta?.scannedAt == null;
+  const lock = await readLockAndRecover(bucket, cacheEmpty);
+  const status = await buildStatusPayload(bucket);
+
+  if (isLockActive(lock, Date.now())) {
+    return {
+      started: false,
+      payload: {
+        scannedAt: status.scannedAt ?? null,
+        symbolCount: status.symbolCount ?? 0,
+        ...status,
+        message: "Scan already in progress",
+      },
+    };
+  }
+
+  return {
+    started: true,
+    payload: {
+      scannedAt: status.scannedAt ?? null,
+      symbolCount: status.symbolCount ?? 0,
+      ...status,
+      scanInProgress: true,
+      scanStartedAt: new Date().toISOString(),
+      message: "Rescan started",
+    },
+  };
+}
+
 /** Serve scan API from R2 directly — bypasses OpenNext (free-tier 10ms CPU → 1102). */
 async function tryServeScanApi(
   request: Request,
@@ -186,19 +238,10 @@ async function tryServeScanApi(
     url.searchParams.get("heal") === "1" ||
     url.searchParams.get("heal") === "true";
   const force = url.searchParams.get("force") === "true";
-  if (heal) return null;
+  if (heal || force) return null;
 
   const bucket = env.SCAN_CACHE_R2_BUCKET;
   if (!bucket) return null;
-
-  if (force) {
-    const metaObj = await bucket.get(META_KEY);
-    const meta = metaObj
-      ? ((await metaObj.json()) as { scannedAt?: string })
-      : null;
-    await readLockAndRecover(bucket, meta?.scannedAt == null);
-    return null;
-  }
 
   const statusOnly = url.searchParams.get("status") === "true";
   if (statusOnly) {
@@ -229,4 +272,4 @@ async function tryServeScanApi(
   });
 }
 
-export { tryServeScanApi };
+export { tryServeScanApi, tryStartForceRescan };
