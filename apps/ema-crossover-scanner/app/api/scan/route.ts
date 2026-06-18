@@ -28,7 +28,10 @@ import {
   scheduleScanJob,
 } from "@/lib/scan-scheduler";
 import { enrichSnapshotSessions } from "@/lib/session-snapshot";
-import { applyQuoteUpdates } from "@/lib/quote-updates";
+import {
+  applyQuoteUpdates,
+  isStaleSessionSnapshot,
+} from "@/lib/quote-updates";
 import { fetchQuoteUpdates } from "@/lib/quotes";
 
 export const dynamic = "force-dynamic";
@@ -45,14 +48,21 @@ async function enrichScanResponseQuotes(
 ): Promise<ScanSnapshot | null> {
   if (!snapshot?.results?.length) return snapshot;
 
-  const nullPriceSymbols = snapshot.results
-    .filter((row) => row.price == null && !row.error)
-    .map((row) => row.symbol);
-  if (nullPriceSymbols.length === 0) return snapshot;
+  const existingBySymbol = new Map(
+    snapshot.results.map((row) => [row.symbol, row]),
+  );
+  const quoteTargets = snapshot.results.filter(
+    (row) =>
+      !row.error &&
+      (row.price == null || isStaleSessionSnapshot(row.sessionSnapshotDate)),
+  );
+  if (quoteTargets.length === 0) return snapshot;
 
-  const quotes = await fetchQuoteUpdates(nullPriceSymbols, {
+  const symbols = quoteTargets.map((row) => row.symbol);
+  const quotes = await fetchQuoteUpdates(symbols, {
     offset: 0,
     limit: WORKERS_QUOTE_ENRICH_LIMIT,
+    existingBySymbol,
   });
   if (!quotes.length) return snapshot;
 
@@ -61,7 +71,12 @@ async function enrichScanResponseQuotes(
 
   if (options.persist) {
     const changed = results.some(
-      (row, index) => row.price !== snapshot.results[index]?.price,
+      (row, index) =>
+        row.price !== snapshot.results[index]?.price ||
+        row.preMarketChange !== snapshot.results[index]?.preMarketChange ||
+        row.regularMarketChange !== snapshot.results[index]?.regularMarketChange ||
+        row.postMarketChange !== snapshot.results[index]?.postMarketChange ||
+        row.sessionSnapshotDate !== snapshot.results[index]?.sessionSnapshotDate,
     );
     if (changed) {
       await saveSnapshot({
@@ -303,6 +318,16 @@ export async function GET(request: NextRequest) {
     // Full universe scans run via cron chunks or explicit ?force=true — not on every GET.
     let responseSnapshot = snapshot;
 
+    if (hasCross4hGaps && responseSnapshot) {
+      try {
+        responseSnapshot =
+          (await healCacheOnRead(responseSnapshot, {}, { maxSymbols: 4 })) ??
+          responseSnapshot;
+      } catch {
+        // return cached snapshot if inline cross4h heal fails
+      }
+    }
+
     if (heal) {
       const shouldInlineHeal =
         snapshot &&
@@ -340,6 +365,18 @@ export async function GET(request: NextRequest) {
         });
       } catch {
         // best-effort quote enrich for table display
+      }
+    } else if (
+      responseSnapshot?.results?.some(
+        (row) => isStaleSessionSnapshot(row.sessionSnapshotDate),
+      )
+    ) {
+      try {
+        responseSnapshot = await enrichScanResponseQuotes(responseSnapshot, {
+          persist: true,
+        });
+      } catch {
+        // best-effort stale session refresh
       }
     }
 

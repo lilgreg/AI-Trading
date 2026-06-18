@@ -557,8 +557,15 @@ async function healRowsBatch(
     const prior =
       (await loadSnapshot())?.results?.find((r) => r.symbol === parsed.yahoo) ??
       row;
+    const needsCross4hHeal = rowNeedsCross4hRescan(prior);
+
+    if (needsCross4hHeal) {
+      await invalidateYahooChartCache(parsed.yahoo, config.historyDays);
+    }
+
     const scanned = await scanSymbol(parsed, config.historyDays, false, index, {
       skipChartStagger: true,
+      skipChartCache: needsCross4hHeal,
     });
     const next = sanitizeScanResult(
       mergeScanResultPreservingQuotes(scanned, prior),

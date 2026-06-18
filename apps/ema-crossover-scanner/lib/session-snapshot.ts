@@ -1,5 +1,6 @@
 import type { SessionChanges } from "./market-session";
 import { getUsMarketSession } from "./market-session";
+import { isStaleSessionSnapshot, nySessionDateKey } from "./quote-updates";
 import { resolveYahooChartSymbol } from "./stocks";
 import type { StockScanResult } from "./types";
 import { getYahooCached, setYahooCached } from "./yahoo-cache";
@@ -230,19 +231,18 @@ export async function resolveSessionChanges(
   >,
   live?: SessionChanges,
 ): Promise<SessionChanges & { sessionSnapshotDate?: string | null }> {
+  const rowIsStale = isStaleSessionSnapshot(row.sessionSnapshotDate);
+
   const merged: SessionChanges = {
-    preMarketChange: mergeSessionField(
-      live?.preMarketChange,
-      row.preMarketChange,
-    ),
-    regularMarketChange: mergeSessionField(
-      live?.regularMarketChange,
-      row.regularMarketChange,
-    ),
-    postMarketChange: mergeSessionField(
-      live?.postMarketChange,
-      row.postMarketChange,
-    ),
+    preMarketChange: rowIsStale
+      ? (live?.preMarketChange ?? null)
+      : mergeSessionField(live?.preMarketChange, row.preMarketChange),
+    regularMarketChange: rowIsStale
+      ? (live?.regularMarketChange ?? null)
+      : mergeSessionField(live?.regularMarketChange, row.regularMarketChange),
+    postMarketChange: rowIsStale
+      ? (live?.postMarketChange ?? null)
+      : mergeSessionField(live?.postMarketChange, row.postMarketChange),
   };
 
   const needsDerive =
@@ -265,7 +265,10 @@ export async function resolveSessionChanges(
   const snapshot = captureSessionSnapshot(merged);
   return {
     ...merged,
-    sessionSnapshotDate: snapshot?.sessionSnapshotDate ?? row.sessionSnapshotDate ?? null,
+    sessionSnapshotDate:
+      snapshot?.sessionSnapshotDate ??
+      (rowIsStale ? nySessionDateKey() : row.sessionSnapshotDate) ??
+      null,
   };
 }
 

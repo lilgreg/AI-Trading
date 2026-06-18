@@ -1,5 +1,23 @@
 import type { StockScanResult } from "./types";
 
+/** Eastern date key (YYYY-MM-DD) for session snapshot staleness checks. */
+export function nySessionDateKey(at: Date = new Date()): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(at);
+}
+
+export function isStaleSessionSnapshot(
+  sessionSnapshotDate: string | null | undefined,
+  at: Date = new Date(),
+): boolean {
+  if (!sessionSnapshotDate) return true;
+  return sessionSnapshotDate !== nySessionDateKey(at);
+}
+
 export interface QuoteUpdate {
   symbol: string;
   price: number | null;
@@ -10,14 +28,25 @@ export interface QuoteUpdate {
   sessionSnapshotDate?: string | null;
 }
 
-/** Never replace a populated session % with null/undefined from a partial poll. */
+/** Never replace a populated session % with null from a partial poll — unless snapshot is stale. */
 function mergeSessionChange(
   incoming: number | null | undefined,
   existing: number | null | undefined,
+  existingSnapshotDate?: string | null,
 ): number | null {
   if (incoming != null) return incoming;
+  if (isStaleSessionSnapshot(existingSnapshotDate)) return null;
   if (existing != null) return existing;
   return null;
+}
+
+/** Quote poll: prefer live Yahoo; drop stale overnight snapshot when incoming is null. */
+function mergeSessionOnQuotePoll(
+  incoming: number | null | undefined,
+  existing: number | null | undefined,
+  existingSnapshotDate: string | null | undefined,
+): number | null {
+  return mergeSessionChange(incoming, existing, existingSnapshotDate);
 }
 
 function mergeNullableNumber(
@@ -40,22 +69,40 @@ export function preserveSessionFields(
   | "price"
   | "sessionSnapshotDate"
 > {
+  const stale = isStaleSessionSnapshot(existing.sessionSnapshotDate);
+  const snapshotDate =
+    incoming.sessionSnapshotDate ??
+    (stale ? nySessionDateKey() : existing.sessionSnapshotDate) ??
+    null;
+
+  if (stale) {
+    return {
+      price: mergeNullableNumber(incoming.price, existing.price),
+      preMarketChange: incoming.preMarketChange ?? null,
+      regularMarketChange: incoming.regularMarketChange ?? null,
+      postMarketChange: incoming.postMarketChange ?? null,
+      sessionSnapshotDate: snapshotDate,
+    };
+  }
+
   return {
     price: mergeNullableNumber(incoming.price, existing.price),
     preMarketChange: mergeSessionChange(
       incoming.preMarketChange,
       existing.preMarketChange,
+      existing.sessionSnapshotDate,
     ),
     regularMarketChange: mergeSessionChange(
       incoming.regularMarketChange,
       existing.regularMarketChange,
+      existing.sessionSnapshotDate,
     ),
     postMarketChange: mergeSessionChange(
       incoming.postMarketChange,
       existing.postMarketChange,
+      existing.sessionSnapshotDate,
     ),
-    sessionSnapshotDate:
-      incoming.sessionSnapshotDate ?? existing.sessionSnapshotDate ?? null,
+    sessionSnapshotDate: snapshotDate,
   };
 }
 
@@ -115,23 +162,32 @@ export function applyQuoteUpdates(
   return results.map((row) => {
     const quote = bySymbol.get(row.symbol);
     if (!quote) return row;
+    const sessionSnapshotDate =
+      quote.sessionSnapshotDate ??
+      (isStaleSessionSnapshot(row.sessionSnapshotDate)
+        ? nySessionDateKey()
+        : row.sessionSnapshotDate) ??
+      null;
+
     return {
       ...row,
       price: mergeNullableNumber(quote.price, row.price),
-      preMarketChange: mergeSessionChange(
+      preMarketChange: mergeSessionOnQuotePoll(
         quote.preMarketChange,
         row.preMarketChange,
+        row.sessionSnapshotDate,
       ),
-      regularMarketChange: mergeSessionChange(
+      regularMarketChange: mergeSessionOnQuotePoll(
         quote.regularMarketChange,
         row.regularMarketChange,
+        row.sessionSnapshotDate,
       ),
-      postMarketChange: mergeSessionChange(
+      postMarketChange: mergeSessionOnQuotePoll(
         quote.postMarketChange,
         row.postMarketChange,
+        row.sessionSnapshotDate,
       ),
-      sessionSnapshotDate:
-        quote.sessionSnapshotDate ?? row.sessionSnapshotDate ?? null,
+      sessionSnapshotDate,
     };
   });
 }

@@ -59,7 +59,14 @@ export async function GET(request: NextRequest) {
     .slice()
     .sort((a, b) => (a.universeIndex ?? 0) - (b.universeIndex ?? 0))
     .map((row) => row.symbol);
-  const quotes = await fetchQuoteUpdates(symbols, { offset, limit });
+  const existingBySymbol = new Map(
+    snapshot.results.map((row) => [row.symbol, row]),
+  );
+  const quotes = await fetchQuoteUpdates(symbols, {
+    offset,
+    limit,
+    existingBySymbol,
+  });
 
   let mergedResults = applyQuoteUpdates(snapshot.results, quotes);
   let sessionChanged = false;
