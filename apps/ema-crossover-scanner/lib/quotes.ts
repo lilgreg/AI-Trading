@@ -8,6 +8,8 @@ import { fetchBatchQuoteMeta, fetchQuoteMeta } from "./yahoo";
 
 export type { QuoteUpdate } from "./quote-updates";
 
+const STALE_V8_REFRESH_LIMIT = 8;
+
 /** Lightweight Yahoo quote fetch — price and session % only (no EMA/pattern rescan). */
 export async function fetchQuoteUpdates(
   symbols: string[],
@@ -39,22 +41,26 @@ export async function fetchQuoteUpdates(
 
   const metaBySymbol = await fetchBatchQuoteMeta(slice);
   const updates: QuoteUpdate[] = [];
+  let staleV8Refreshed = 0;
 
   for (const symbol of slice) {
     const existing = options.existingBySymbol?.get(symbol);
     const staleSession = isStaleSessionSnapshot(existing?.sessionSnapshotDate ?? null);
-    const meta = staleSession
-      ? await fetchQuoteMeta(symbol, { refreshSession: true })
-      : (metaBySymbol.get(symbol) ?? {
-          name: null,
-          price: null,
-          exchange: null,
-          quoteExchange: null,
-          dailyChange: null,
-          preMarketChange: null,
-          regularMarketChange: null,
-          postMarketChange: null,
-        });
+    const emptyMeta = {
+      name: null,
+      price: null,
+      exchange: null,
+      quoteExchange: null,
+      dailyChange: null,
+      preMarketChange: null,
+      regularMarketChange: null,
+      postMarketChange: null,
+    };
+    let meta = metaBySymbol.get(symbol) ?? emptyMeta;
+    if (staleSession && staleV8Refreshed < STALE_V8_REFRESH_LIMIT) {
+      meta = await fetchQuoteMeta(symbol, { refreshSession: true });
+      staleV8Refreshed += 1;
+    }
     const resolved = await resolveSessionChanges(
       {
         symbol,
