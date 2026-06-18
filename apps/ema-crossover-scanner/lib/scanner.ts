@@ -1,4 +1,5 @@
 import {
+  findLastAbovePeriodStart,
   formatCrossoverDateTime,
   latestEmaValues,
   resolveBullishCrossover,
@@ -215,9 +216,16 @@ export async function scanSymbol(
     const cross1h = buildCrossoverDisplay(
       resolveBullishCrossover(hourly, FAST_EMA, SLOW_EMA, fastAboveSlow1h),
     );
-    const cross4h = buildCrossoverDisplay(
-      resolveBullishCrossover(bars4h, FAST_EMA, SLOW_EMA, fastAboveSlow),
+    let cross4hInfo = resolveBullishCrossover(
+      bars4h,
+      FAST_EMA,
+      SLOW_EMA,
+      fastAboveSlow,
     );
+    if (!cross4hInfo && (cross1h.crossoverAt ?? cross1h.crossoverDate)) {
+      cross4hInfo = findLastAbovePeriodStart(bars4h, FAST_EMA, SLOW_EMA);
+    }
+    const cross4h = buildCrossoverDisplay(cross4hInfo);
 
     const patterns = evaluateAllPatterns(hourly, bars4h, quoteFields.price, includePatternDebug);
 
