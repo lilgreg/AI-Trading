@@ -34,9 +34,7 @@ crons = [
   "15 0 * * *",
 ]
 
-# Paid Workers: extend CPU for OpenNext SSR + scan API (free tier caps at 10ms → 1102).
-[limits]
-cpu_ms = 300000
+# Free tier cannot set cpu_ms (deploy error 100328); R2 fast-path in custom-worker handles 1102 instead.
 
 [observability]
 enabled = true
