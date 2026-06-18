@@ -89,7 +89,38 @@ function joinUsefulParagraphs(parts: string[]): string {
     if (FOOTER_START_RE.test(part.trim()) || FOOTER_INLINE_RE.test(part)) break;
     if (isUsefulParagraph(part)) kept.push(part);
   }
-  return trimFooterJunk(kept.join("\n\n"));
+  const strict = trimFooterJunk(kept.join("\n\n"));
+  if (strict.length >= 80) return strict;
+
+  // Some Yahoo layouts use shorter ledes; keep non-footer paragraphs if strict filter removed all.
+  const relaxed: string[] = [];
+  for (const part of parts) {
+    if (FOOTER_START_RE.test(part.trim()) || FOOTER_INLINE_RE.test(part)) break;
+    if (part.trim().length >= 40) relaxed.push(part.trim());
+  }
+  return trimFooterJunk(relaxed.join("\n\n"));
+}
+
+/** Slice a bounded HTML region after a marker (avoids brittle single-</div> regex). */
+function sliceAfterMarker(html: string, marker: RegExp, maxLen = 80_000): string | null {
+  const match = html.match(marker);
+  if (!match || match.index == null) return null;
+  const start = match.index + match[0].length;
+  return html.slice(start, start + maxLen);
+}
+
+function extractParagraphsFromHtml(
+  htmlChunk: string,
+  minLen = 30,
+): string[] {
+  const parts: string[] = [];
+  for (const p of htmlChunk.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/gi)) {
+    const text = stripHtml(decodeHtmlEntities(p[1]));
+    if (!text) continue;
+    if (FOOTER_START_RE.test(text.trim()) || FOOTER_INLINE_RE.test(text)) break;
+    if (text.length >= minLen) parts.push(text);
+  }
+  return parts;
 }
 
 function extractCanonicalUrl(html: string): string | null {
@@ -142,7 +173,7 @@ function extractYahooNextArticleBody(html: string): string | null {
 
   try {
     const parsed = JSON.parse(match[1]) as unknown;
-    const bodyKeys = new Set(["articleBody", "description", "summary"]);
+    const bodyKeys = new Set(["articleBody", "description", "summary", "content"]);
     let best = "";
     const walk = (node: unknown): void => {
       if (node == null) return;
@@ -201,62 +232,51 @@ async function fetchPreviewHtml(url: string): Promise<string | null> {
 }
 
 function extractYahooTestIdArticleBody(html: string): string | null {
-  const match = html.match(
-    /data-testid=["']article-body["'][^>]*>([\s\S]*?)<\/div>\s*<\/div>\s*<div/i,
-  );
-  if (!match) return null;
+  const chunk = sliceAfterMarker(html, /data-testid=["']article-body["'][^>]*>/i);
+  if (!chunk) return null;
 
-  const parts: string[] = [];
-  for (const p of match[1].matchAll(/<p[^>]*>([\s\S]*?)<\/p>/gi)) {
-    const text = stripHtml(decodeHtmlEntities(p[1]));
-    if (!text) continue;
-    if (FOOTER_START_RE.test(text.trim()) || FOOTER_INLINE_RE.test(text)) break;
-    if (text.length > 30) parts.push(text);
-  }
-  const combined = joinUsefulParagraphs(parts);
+  const combined = joinUsefulParagraphs(extractParagraphsFromHtml(chunk));
   return combined.length > 80 ? combined : null;
 }
 
 function extractYahooCaasParagraphs(html: string): string | null {
-  const caasMatch = html.match(
-    /class=["'][^"']*caas-body[^"']*["'][^>]*>([\s\S]*?)<\/div>/i,
-  );
-  if (!caasMatch) return null;
+  const chunk = sliceAfterMarker(html, /class=["'][^"']*caas-body[^"']*["'][^>]*>/i);
+  if (!chunk) return null;
 
-  const parts: string[] = [];
-  for (const p of caasMatch[1].matchAll(/<p[^>]*>([\s\S]*?)<\/p>/gi)) {
-    const text = stripHtml(decodeHtmlEntities(p[1]));
-    if (text.length > 40) parts.push(text);
-  }
-  const combined = joinUsefulParagraphs(parts);
+  const combined = joinUsefulParagraphs(extractParagraphsFromHtml(chunk, 40));
+  return combined.length > 80 ? combined : null;
+}
+
+function extractYahooArticleLocator(html: string): string | null {
+  const chunk = sliceAfterMarker(html, /data-test-locator=["']article["'][^>]*>/i);
+  if (!chunk) return null;
+
+  const combined = joinUsefulParagraphs(extractParagraphsFromHtml(chunk));
   return combined.length > 80 ? combined : null;
 }
 
 function extractArticleParagraphs(html: string): string | null {
-  const yahooBody = extractYahooTestIdArticleBody(html);
-  if (yahooBody && yahooBody.length >= 200) return yahooBody;
+  const candidates = [
+    extractYahooTestIdArticleBody(html),
+    extractYahooCaasParagraphs(html),
+    extractYahooArticleLocator(html),
+  ];
 
-  const yahooCaas = extractYahooCaasParagraphs(html);
-  if (yahooCaas && yahooCaas.length >= 200) return yahooCaas;
+  let best = "";
+  for (const text of candidates) {
+    if (text && text.length > best.length) best = text;
+  }
+  if (best.length >= 200) return best;
 
   const regionPattern =
     /<(article|main|div)[^>]*(?:class|id|data-testid)=["'][^"']*(?:article-body|article|story|content|post-body|entry-content)[^"']*["'][^>]*>([\s\S]*?)<\/\1>/gi;
 
-  let best = "";
   for (const match of html.matchAll(regionPattern)) {
-    const inner = match[2];
-    const paragraphs = inner.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/gi);
-    const parts: string[] = [];
-    for (const p of paragraphs) {
-      const text = stripHtml(decodeHtmlEntities(p[1]));
-      if (FOOTER_START_RE.test(text.trim()) || FOOTER_INLINE_RE.test(text)) break;
-      if (text.length > 40) parts.push(text);
-    }
-    const combined = joinUsefulParagraphs(parts);
+    const combined = joinUsefulParagraphs(extractParagraphsFromHtml(match[2], 40));
     if (combined.length > best.length) best = combined;
   }
 
-  return best || yahooBody || yahooCaas || null;
+  return best || candidates.find((t) => t && t.length > 80) || null;
 }
 
 function longestText(...candidates: (string | null | undefined)[]): string | null {
@@ -272,14 +292,12 @@ function buildFallbackSummary(
   headline?: string | null,
   yahooSummary?: string | null,
 ): string | null {
-  const parts: string[] = [];
   const summary = yahooSummary?.trim();
   const title = headline?.trim();
-  if (summary && summary.length >= MIN_USEFUL_LEN) parts.push(summary);
-  else if (title && summary) parts.push(`${title}\n\n${summary}`);
-  else if (summary) parts.push(summary);
-  else if (title) parts.push(title);
-  return parts.join("\n\n").trim() || null;
+  if (summary && summary.length >= MIN_USEFUL_LEN) return summary;
+  if (summary && title && summary !== title) return summary;
+  if (summary && summary.length >= 80) return summary;
+  return null;
 }
 
 function trimSummary(summary: string | null): string | null {
@@ -347,7 +365,10 @@ async function scrapeSummary(
   }
 
   const metaSummary = extractMetaSummary(html);
-  const summary = longestText(fullText, metaSummary);
+  const summary = longestText(
+    fullText,
+    metaSummary && metaSummary.length >= 80 ? metaSummary : null,
+  );
 
   return { summary, fullText: fullText ?? summary };
 }

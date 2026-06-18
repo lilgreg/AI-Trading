@@ -24,6 +24,7 @@ import {
   formatRateLimitError,
   hydrateRateLimitFromStorage,
   isWorkerRateLimited,
+  isWorkerRateLimitResponse,
   noteWorkerRateLimit,
   noteWorkerSuccess,
   shouldShowRateLimitBanner,
@@ -505,8 +506,8 @@ export default function HomePage() {
       }
       if (!res.ok) {
         const text = await res.text().catch(() => "");
-        noteWorkerRateLimit(res.status, text);
-        if (res.status === 429 || text.includes("1027") || text.includes("1102")) {
+        if (isWorkerRateLimitResponse(res.status, text)) {
+          noteWorkerRateLimit(res.status, text);
           const msg = formatRateLimitError();
           setRateLimitMsg(msg);
           if (!options?.quiet) setError(msg);
@@ -652,6 +653,7 @@ export default function HomePage() {
         if (!prev) return prev;
         return {
           ...prev,
+          scannedAt: status.scannedAt ?? prev.scannedAt,
           stale: status.stale ?? prev.stale,
           scanInProgress: status.scanInProgress ?? prev.scanInProgress,
           cacheEmpty: status.cacheEmpty ?? prev.cacheEmpty,
@@ -1266,7 +1268,7 @@ export default function HomePage() {
                 {formatScanDataAge(data?.scannedAt ?? null)}
               </span>
               {data?.stale && !data.scanInProgress && (
-                <span className="ml-1 text-[var(--amber)]">(stale)</span>
+                <span className="ml-1 text-[var(--amber)]">{" "}(stale)</span>
               )}
             </p>
             <div className="flex gap-2">

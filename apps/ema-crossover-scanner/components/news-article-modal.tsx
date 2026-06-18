@@ -37,12 +37,30 @@ function looksLikeFooterJunk(text: string): boolean {
   );
 }
 
-function pickBestSummary(...candidates: (string | null | undefined)[]): string {
+function normalizeForCompare(text: string): string {
+  return text.replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function isDuplicateOfHeadline(text: string, headline: string): boolean {
+  const h = normalizeForCompare(headline);
+  if (!h) return false;
+  const t = normalizeForCompare(text);
+  if (t === h) return true;
+  // "Title\n\nTitle" fallback from API
+  return t === `${h} ${h}` || t.startsWith(`${h}\n\n${h}`);
+}
+
+function pickBestSummary(
+  headline: string,
+  ...candidates: (string | null | undefined)[]
+): string {
   const trimmed = candidates
     .map((c) => c?.trim())
     .filter((c): c is string => Boolean(c));
-  const clean = trimmed.filter((t) => !looksLikeFooterJunk(t));
-  return longestSummary(...(clean.length ? clean : trimmed));
+  const clean = trimmed.filter(
+    (t) => !looksLikeFooterJunk(t) && !isDuplicateOfHeadline(t, headline),
+  );
+  return longestSummary(...(clean.length ? clean : trimmed.filter((t) => !isDuplicateOfHeadline(t, headline))));
 }
 
 function hasAdequateSummary(text: string | null | undefined): boolean {
@@ -91,12 +109,12 @@ export function NewsArticleModal({ article, onClose }: NewsArticleModalProps) {
 
     const applyBest = (...candidates: (string | null | undefined)[]) => {
       if (cancelled) return;
-      setDisplaySummary((prev) => pickBestSummary(prev, ...candidates));
+      setDisplaySummary((prev) => pickBestSummary(article.headline, prev, ...candidates));
     };
 
     const yahooSummary = article.summary?.trim() ?? "";
     const cachedPreview = getCachedNewsPreview(article.url);
-    const seed = pickBestSummary(yahooSummary, cachedPreview);
+    const seed = pickBestSummary(article.headline, yahooSummary, cachedPreview);
     setDisplaySummary(seed);
     setPreviewPending(Boolean(article.url));
 
@@ -115,9 +133,9 @@ export function NewsArticleModal({ article, onClose }: NewsArticleModalProps) {
         if (cancelled) return;
         setPreviewPending(false);
         setDisplaySummary((prev) => {
-          const best = pickBestSummary(prev, yahooSummary);
+          const best = pickBestSummary(article.headline, prev, yahooSummary);
           if (hasAdequateSummary(best)) return best;
-          return pickBestSummary(best, article.headline);
+          return best;
         });
       }
     })();
@@ -131,9 +149,9 @@ export function NewsArticleModal({ article, onClose }: NewsArticleModalProps) {
   if (!article) return null;
 
   const summaryText = pickBestSummary(
+    article.headline,
     displaySummary,
     article.summary,
-    !previewPending ? article.headline : null,
   );
   const showLoadingHint = previewPending && !hasAdequateSummary(summaryText);
 

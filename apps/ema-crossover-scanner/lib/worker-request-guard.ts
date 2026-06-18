@@ -50,6 +50,11 @@ export function guardWorkerRequest(
     return { allowed: true };
   }
 
+  // User-initiated preview fetches Yahoo — do not count against burst budget.
+  if (path === "/api/news/preview") {
+    return { allowed: true };
+  }
+
   const now = Date.now();
   if (now - windowStartMs >= WINDOW_MS) {
     windowStartMs = now;

@@ -43,11 +43,22 @@ export function hydrateRateLimitFromStorage(): void {
 
 function bodyLooksRateLimited(bodyText: string): boolean {
   const lower = bodyText.toLowerCase();
+  if (lower.includes("too many requests")) return true;
+  if (lower.includes("temporarily rate")) return true;
+  if (/\berror\s*(code\s*)?(1027|1102)\b/.test(lower)) return true;
+  if (/\bworkers\b[^\n]{0,80}\b(1027|1102)\b/.test(lower)) return true;
+  if (lower.includes("rate limited") && lower.includes("retry")) return true;
+  return false;
+}
+
+/** Shared check for scan/news handlers that inspect error bodies manually. */
+export function isWorkerRateLimitResponse(
+  status?: number,
+  bodyText?: string,
+): boolean {
   return (
-    lower.includes("1027") ||
-    lower.includes("rate limited") ||
-    lower.includes("too many requests") ||
-    lower.includes("temporarily rate")
+    (status != null && RATE_LIMIT_STATUSES.has(status)) ||
+    (bodyText != null && bodyLooksRateLimited(bodyText))
   );
 }
 
@@ -65,10 +76,7 @@ export function shouldShowRateLimitBanner(): boolean {
 }
 
 export function noteWorkerRateLimit(status?: number, bodyText?: string): void {
-  const limited =
-    (status != null && RATE_LIMIT_STATUSES.has(status)) ||
-    (bodyText != null && bodyLooksRateLimited(bodyText));
-  if (!limited) return;
+  if (!isWorkerRateLimitResponse(status, bodyText)) return;
 
   rateLimitBlocking = true;
   backoffUntilMs = Date.now() + currentBackoffMs;
