@@ -9,7 +9,36 @@ export const maxDuration = 15;
 
 const PREVIEW_TIMEOUT_MS = 10_000;
 const MAX_SUMMARY_LEN = 50_000;
+const MIN_LEDE_LEN = 80;
+const PUBLISHER_HOST_RE =
+  /^(www\.)?(wsj|barrons|reuters|marketwatch|apnews|bloomberg)\.com$/i;
 const MIN_USEFUL_LEN = 500;
+
+function isJunkSummaryText(
+  text: string | null | undefined,
+  headline?: string | null,
+): boolean {
+  const trimmed = text?.trim();
+  if (!trimmed || trimmed.length < MIN_LEDE_LEN) return true;
+  if (BOILERPLATE_RE.test(trimmed)) return true;
+  if (AFFILIATE_RE.test(trimmed)) return true;
+  const title = headline?.trim();
+  if (title && trimmed === title) return true;
+  if (title && trimmed.length < 120 && title.startsWith(trimmed.slice(0, 40))) {
+    return true;
+  }
+  return false;
+}
+
+function isUsefulSummaryText(
+  text: string | null | undefined,
+  headline?: string | null,
+): boolean {
+  const trimmed = text?.trim();
+  return Boolean(
+    trimmed && !isJunkSummaryText(trimmed, headline) && trimmed.length >= MIN_USEFUL_LEN,
+  );
+}
 const PREVIEW_USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
@@ -96,7 +125,10 @@ function joinUsefulParagraphs(parts: string[]): string {
   const relaxed: string[] = [];
   for (const part of parts) {
     if (FOOTER_START_RE.test(part.trim()) || FOOTER_INLINE_RE.test(part)) break;
-    if (part.trim().length >= 40) relaxed.push(part.trim());
+    const trimmed = part.trim();
+    if (trimmed.length < 40) continue;
+    if (BOILERPLATE_RE.test(trimmed) || AFFILIATE_RE.test(trimmed)) continue;
+    relaxed.push(trimmed);
   }
   return trimFooterJunk(relaxed.join("\n\n"));
 }
@@ -133,6 +165,54 @@ function extractCanonicalUrl(html: string): string | null {
     if (match?.[1]) return match[1];
   }
   return null;
+}
+
+function isSameYahooArticle(sourceUrl: string, canonicalUrl: string): boolean {
+  try {
+    const source = new URL(sourceUrl);
+    const canonical = new URL(canonicalUrl, sourceUrl);
+    if (source.hostname.replace(/^www\./, "") !== canonical.hostname.replace(/^www\./, "")) {
+      return true;
+    }
+    const sourceUuid = source.pathname.match(/\/m\/([a-f0-9-]+)\//i)?.[1];
+    const canonicalUuid = canonical.pathname.match(/\/m\/([a-f0-9-]+)\//i)?.[1];
+    if (sourceUuid && canonicalUuid) return sourceUuid === canonicalUuid;
+    return source.pathname === canonical.pathname;
+  } catch {
+    return false;
+  }
+}
+
+function extractPublisherArticleUrl(html: string): string | null {
+  const seen = new Set<string>();
+  const matches = html.matchAll(
+    /https?:\/\/[a-z0-9.-]*(?:wsj|barrons|reuters|marketwatch|apnews|bloomberg)\.[a-z.]+\/[^"'\s<>\\]+/gi,
+  );
+
+  for (const match of matches) {
+    const raw = match[0].replace(/\\+$/, "");
+    if (seen.has(raw)) continue;
+    seen.add(raw);
+    try {
+      const parsed = new URL(raw);
+      if (!PUBLISHER_HOST_RE.test(parsed.hostname)) continue;
+      if (parsed.pathname === "/" || parsed.pathname.length < 8) continue;
+      return parsed.toString();
+    } catch {
+      // ignore malformed publisher URLs
+    }
+  }
+  return null;
+}
+
+function pickBestExtractedText(...candidates: (string | null | undefined)[]): string | null {
+  let best = "";
+  for (const candidate of candidates) {
+    const trimmed = candidate?.trim();
+    if (!trimmed || isJunkSummaryText(trimmed)) continue;
+    if (trimmed.length > best.length) best = trimmed;
+  }
+  return best || null;
 }
 
 function extractJsonLdText(html: string): string | null {
@@ -256,27 +336,25 @@ function extractYahooArticleLocator(html: string): string | null {
 }
 
 function extractArticleParagraphs(html: string): string | null {
-  const candidates = [
+  const targeted = [
     extractYahooTestIdArticleBody(html),
     extractYahooCaasParagraphs(html),
     extractYahooArticleLocator(html),
   ];
+  let best = pickBestExtractedText(...targeted) ?? "";
 
-  let best = "";
-  for (const text of candidates) {
-    if (text && text.length > best.length) best = text;
-  }
-  if (best.length >= 200) return best;
+  if (best.length >= MIN_USEFUL_LEN) return best;
 
   const regionPattern =
     /<(article|main|div)[^>]*(?:class|id|data-testid)=["'][^"']*(?:article-body|article|story|content|post-body|entry-content)[^"']*["'][^>]*>([\s\S]*?)<\/\1>/gi;
 
   for (const match of html.matchAll(regionPattern)) {
     const combined = joinUsefulParagraphs(extractParagraphsFromHtml(match[2], 40));
+    if (isJunkSummaryText(combined)) continue;
     if (combined.length > best.length) best = combined;
   }
 
-  return best || candidates.find((t) => t && t.length > 80) || null;
+  return best || pickBestExtractedText(...targeted);
 }
 
 function longestText(...candidates: (string | null | undefined)[]): string | null {
@@ -293,11 +371,45 @@ function buildFallbackSummary(
   yahooSummary?: string | null,
 ): string | null {
   const summary = yahooSummary?.trim();
-  const title = headline?.trim();
-  if (summary && summary.length >= MIN_USEFUL_LEN) return summary;
-  if (summary && title && summary !== title) return summary;
-  if (summary && summary.length >= 80) return summary;
+  if (!summary || isJunkSummaryText(summary, headline)) return null;
+  if (summary.length >= MIN_USEFUL_LEN) return summary;
+  if (headline && summary !== headline.trim() && summary.length >= MIN_LEDE_LEN) {
+    return summary;
+  }
   return null;
+}
+
+function resolvePreviewText(options: {
+  scrapedFull: string | null;
+  scrapedSummary: string | null;
+  metaSummary: string | null;
+  headline?: string | null;
+  yahooSummary?: string | null;
+}): string | null {
+  const { scrapedFull, scrapedSummary, metaSummary, headline, yahooSummary } = options;
+  const feedSummary = yahooSummary?.trim() || null;
+
+  const scrapedCandidates = [scrapedFull, scrapedSummary].filter(
+    (text): text is string => Boolean(text?.trim()) && !isJunkSummaryText(text, headline),
+  );
+  const scrapedBest = longestText(...scrapedCandidates);
+
+  const meta =
+    metaSummary && !isJunkSummaryText(metaSummary, headline) && metaSummary.length >= MIN_LEDE_LEN
+      ? metaSummary
+      : null;
+
+  if (
+    feedSummary &&
+    !isJunkSummaryText(feedSummary, headline) &&
+    (!scrapedBest ||
+      isJunkSummaryText(scrapedBest, headline) ||
+      (feedSummary.length > scrapedBest.length && scrapedBest.length < MIN_USEFUL_LEN))
+  ) {
+    return trimSummary(longestText(scrapedBest, meta, feedSummary));
+  }
+
+  return trimSummary(longestText(scrapedBest, meta, feedSummary));
 }
 
 function trimSummary(summary: string | null): string | null {
@@ -322,12 +434,32 @@ function extractMetaSummary(html: string): string | null {
 
 /** Priority: article paragraphs > Yahoo __NEXT_DATA__ > JSON-LD > meta description. */
 function extractFullArticleText(html: string): string | null {
-  const text = longestText(
+  const text = pickBestExtractedText(
     extractArticleParagraphs(html),
     extractYahooNextArticleBody(html),
     extractJsonLdText(html),
   );
   return text ? trimFooterJunk(text) : null;
+}
+
+async function fetchPublisherArticleText(
+  html: string,
+  sourceUrl: string,
+): Promise<string | null> {
+  const href = extractPublisherArticleUrl(html);
+  if (!href) return null;
+
+  let publisherUrl: string;
+  try {
+    publisherUrl = new URL(href, sourceUrl).toString();
+  } catch {
+    return null;
+  }
+
+  const publisherHtml = await fetchPreviewHtml(publisherUrl);
+  if (!publisherHtml) return null;
+  const text = extractFullArticleText(publisherHtml);
+  return text && !isJunkSummaryText(text) ? text : null;
 }
 
 async function fetchCanonicalArticleText(
@@ -343,20 +475,29 @@ async function fetchCanonicalArticleText(
   } catch {
     return null;
   }
-  if (canonicalUrl === sourceUrl) return null;
+  if (canonicalUrl === sourceUrl || !isSameYahooArticle(sourceUrl, canonicalUrl)) {
+    return null;
+  }
 
   const canonicalHtml = await fetchPreviewHtml(canonicalUrl);
   if (!canonicalHtml) return null;
-  return extractFullArticleText(canonicalHtml);
+  const text = extractFullArticleText(canonicalHtml);
+  return text && !isJunkSummaryText(text) ? text : null;
 }
 
 async function scrapeSummary(
   url: string,
-): Promise<{ summary: string | null; fullText: string | null }> {
+): Promise<{ summary: string | null; fullText: string | null; metaSummary: string | null }> {
   const html = await fetchPreviewHtml(url);
-  if (!html) return { summary: null, fullText: null };
+  if (!html) return { summary: null, fullText: null, metaSummary: null };
 
   let fullText = extractFullArticleText(html);
+  if (!fullText || fullText.length < MIN_USEFUL_LEN) {
+    const publisherText = await fetchPublisherArticleText(html, url);
+    if (publisherText && publisherText.length > (fullText?.length ?? 0)) {
+      fullText = publisherText;
+    }
+  }
   if (!fullText || fullText.length < MIN_USEFUL_LEN) {
     const canonicalText = await fetchCanonicalArticleText(html, url);
     if (canonicalText && canonicalText.length > (fullText?.length ?? 0)) {
@@ -365,12 +506,12 @@ async function scrapeSummary(
   }
 
   const metaSummary = extractMetaSummary(html);
-  const summary = longestText(
+  const summary = pickBestExtractedText(
     fullText,
-    metaSummary && metaSummary.length >= 80 ? metaSummary : null,
+    metaSummary && metaSummary.length >= MIN_LEDE_LEN ? metaSummary : null,
   );
 
-  return { summary, fullText: fullText ?? summary };
+  return { summary, fullText: summary, metaSummary };
 }
 
 export async function GET(request: Request) {
@@ -401,7 +542,7 @@ export async function GET(request: Request) {
       fullText?: string | null;
     }>("news-preview", cacheId);
     const cachedFull = cached?.fullText?.trim() || cached?.summary?.trim() || "";
-    if (cachedFull.length >= MIN_USEFUL_LEN) {
+    if (isUsefulSummaryText(cachedFull, headline)) {
       return NextResponse.json({
         summary: cached?.summary ?? cachedFull,
         fullText: cached?.fullText ?? cachedFull,
@@ -409,19 +550,25 @@ export async function GET(request: Request) {
     }
 
     const scraped = await scrapeSummary(target.toString());
-    const fallback = buildFallbackSummary(headline, yahooSummary);
-    const fullText = trimSummary(
-      longestText(scraped.fullText, scraped.summary, fallback) ?? fallback,
-    );
+    const fullText = resolvePreviewText({
+      scrapedFull: scraped.fullText,
+      scrapedSummary: scraped.summary,
+      metaSummary: scraped.metaSummary,
+      headline,
+      yahooSummary,
+    });
     const summary = fullText;
 
-    if (fullText && fullText.length >= MIN_USEFUL_LEN) {
+    if (fullText && isUsefulSummaryText(fullText, headline)) {
       await setYahooCached("news-preview", cacheId, { summary, fullText });
     }
 
     return NextResponse.json({ summary: summary ?? null, fullText: fullText ?? null });
   } catch {
     const fallback = trimSummary(buildFallbackSummary(headline, yahooSummary));
+    if (fallback && isJunkSummaryText(fallback, headline)) {
+      return NextResponse.json({ summary: null, fullText: null });
+    }
     return NextResponse.json({ summary: fallback, fullText: fallback });
   }
 }
