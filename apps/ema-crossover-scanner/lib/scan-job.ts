@@ -30,6 +30,7 @@ import { stripDisplayTicker, resolveTradingViewSymbol } from "./stocks";
 import { buildSymbolUniverse } from "./symbols";
 import type { ParsedSymbol, StockScanResult } from "./types";
 import { EMPTY_CROSSOVER, NONE_PATTERNS } from "./types";
+import { invalidateYahooChartCache } from "./yahoo-cache";
 
 export interface ScanJobConfig {
   includeBlueChips: boolean;

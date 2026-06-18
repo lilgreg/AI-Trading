@@ -48,45 +48,54 @@ async function enrichScanResponseQuotes(
 ): Promise<ScanSnapshot | null> {
   if (!snapshot?.results?.length) return snapshot;
 
-  const existingBySymbol = new Map(
-    snapshot.results.map((row) => [row.symbol, row]),
-  );
-  const quoteTargets = snapshot.results.filter(
-    (row) =>
-      !row.error &&
-      (row.price == null || isStaleSessionSnapshot(row.sessionSnapshotDate)),
-  );
-  if (quoteTargets.length === 0) return snapshot;
+  let current = snapshot;
+  const maxBatches = Math.ceil(current.results.length / WORKERS_QUOTE_ENRICH_LIMIT) + 1;
 
-  const symbols = quoteTargets.map((row) => row.symbol);
-  const quotes = await fetchQuoteUpdates(symbols, {
-    offset: 0,
-    limit: WORKERS_QUOTE_ENRICH_LIMIT,
-    existingBySymbol,
-  });
-  if (!quotes.length) return snapshot;
-
-  const results = applyQuoteUpdates(snapshot.results, quotes);
-  const updated = { ...snapshot, results };
-
-  if (options.persist) {
-    const changed = results.some(
-      (row, index) =>
-        row.price !== snapshot.results[index]?.price ||
-        row.preMarketChange !== snapshot.results[index]?.preMarketChange ||
-        row.regularMarketChange !== snapshot.results[index]?.regularMarketChange ||
-        row.postMarketChange !== snapshot.results[index]?.postMarketChange ||
-        row.sessionSnapshotDate !== snapshot.results[index]?.sessionSnapshotDate,
+  for (let batch = 0; batch < maxBatches; batch += 1) {
+    const existingBySymbol = new Map(
+      current.results.map((row) => [row.symbol, row]),
     );
-    if (changed) {
-      await saveSnapshot({
-        ...updated,
-        lastSavedAt: new Date().toISOString(),
-      });
+    const quoteTargets = current.results.filter(
+      (row) =>
+        !row.error &&
+        (row.price == null || isStaleSessionSnapshot(row.sessionSnapshotDate)),
+    );
+    if (quoteTargets.length === 0) return current;
+
+    const symbols = quoteTargets
+      .slice(0, WORKERS_QUOTE_ENRICH_LIMIT)
+      .map((row) => row.symbol);
+    const quotes = await fetchQuoteUpdates(symbols, {
+      offset: 0,
+      limit: symbols.length,
+      existingBySymbol,
+    });
+    if (!quotes.length) return current;
+
+    const results = applyQuoteUpdates(current.results, quotes);
+    const updated = { ...current, results };
+
+    if (options.persist) {
+      const changed = results.some(
+        (row, index) =>
+          row.price !== current.results[index]?.price ||
+          row.preMarketChange !== current.results[index]?.preMarketChange ||
+          row.regularMarketChange !== current.results[index]?.regularMarketChange ||
+          row.postMarketChange !== current.results[index]?.postMarketChange ||
+          row.sessionSnapshotDate !== current.results[index]?.sessionSnapshotDate,
+      );
+      if (changed) {
+        await saveSnapshot({
+          ...updated,
+          lastSavedAt: new Date().toISOString(),
+        });
+      }
     }
+
+    current = updated;
   }
 
-  return updated;
+  return current;
 }
 const HEAL_MAX_SYMBOLS = 12;
 const HEAL_MAX_ROUNDS = 1;

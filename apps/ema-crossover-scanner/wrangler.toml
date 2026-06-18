@@ -2,7 +2,7 @@ name = "ai-trading-scanner"
 main = "./custom-worker.ts"
 compatibility_date = "2026-06-16"
 compatibility_flags = ["nodejs_compat", "global_fetch_strictly_public"]
-workers_dev = true # deploy trigger 2026-06-17
+# deploy trigger 2026-06-17T21:50Z — fix build + cross4h/session heal
 
 # Custom domains are NOT declared here — attach in dashboard:
 # Workers & Pages → ai-trading-scanner → Settings → Domains & Routes → Add custom domain.

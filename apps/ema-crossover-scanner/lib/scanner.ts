@@ -1,5 +1,6 @@
 import {
   findLastAbovePeriodStart,
+  findMostRecentBullishCrossover,
   formatCrossoverDateTime,
   latestEmaValues,
   resolveBullishCrossover,
@@ -223,7 +224,9 @@ export async function scanSymbol(
       fastAboveSlow,
     );
     if (!cross4hInfo && (cross1h.crossoverAt ?? cross1h.crossoverDate)) {
-      cross4hInfo = findLastAbovePeriodStart(bars4h, FAST_EMA, SLOW_EMA);
+      cross4hInfo =
+        findLastAbovePeriodStart(bars4h, FAST_EMA, SLOW_EMA) ??
+        findMostRecentBullishCrossover(bars4h, FAST_EMA, SLOW_EMA);
     }
     const cross4h = buildCrossoverDisplay(cross4hInfo);
 
