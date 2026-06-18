@@ -22,6 +22,7 @@ import {
   retryFailedSymbols,
   scanAndMergeSymbol,
 } from "@/lib/scan-job";
+import { fillCross4hGaps } from "@/lib/cross4h-fallback";
 import { isCloudflareWorkersRuntime } from "@/lib/runtime";
 import {
   scheduleBackgroundTask,
@@ -100,6 +101,26 @@ async function enrichScanResponseQuotes(
 
   return current;
 }
+
+async function applyCross4hFallback(
+  snapshot: ScanSnapshot | null,
+  options: { persist?: boolean } = {},
+): Promise<ScanSnapshot | null> {
+  if (!snapshot?.results?.length) return snapshot;
+
+  const { results, changed } = fillCross4hGaps(snapshot.results);
+  if (!changed) return snapshot;
+
+  const updated = { ...snapshot, results };
+  if (options.persist) {
+    await saveSnapshot({
+      ...updated,
+      lastSavedAt: new Date().toISOString(),
+    });
+  }
+  return updated;
+}
+
 const HEAL_MAX_SYMBOLS = 12;
 const HEAL_MAX_ROUNDS = 1;
 const SESSION_ENRICH_MAX = 40;
@@ -386,6 +407,10 @@ export async function GET(request: NextRequest) {
       }
     }
 
+    responseSnapshot = await applyCross4hFallback(responseSnapshot, {
+      persist: true,
+    });
+
     const cacheControl =
       heal || force
         ? "no-store"
@@ -515,6 +540,8 @@ export async function GET(request: NextRequest) {
   }
 
   status = await buildCacheStatus(snapshot);
+
+  snapshot = await applyCross4hFallback(snapshot, { persist: true });
 
   const unscannedCount = snapshot?.results?.filter(
     (row) => row.error === "Not scanned yet",

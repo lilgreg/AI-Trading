@@ -2,7 +2,7 @@
 const BASE =
   process.env.PROD_URL ?? "https://ai-trading-scanner.lilgreg1.workers.dev";
 const BATCH_SIZE = 10;
-const DELAY_MS = 3_000;
+const DELAY_MS = Number(process.env.RESCAN_DELAY_MS ?? 6_000);
 
 function hasCross(c?: { crossoverAt?: string | null; crossoverDate?: string | null }): boolean {
   return Boolean(c?.crossoverAt ?? c?.crossoverDate);
