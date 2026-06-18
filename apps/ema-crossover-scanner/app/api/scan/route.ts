@@ -330,16 +330,6 @@ export async function GET(request: NextRequest) {
     // Full universe scans run via cron chunks or explicit ?force=true — not on every GET.
     let responseSnapshot = snapshot;
 
-    if (hasCross4hGaps && responseSnapshot) {
-      try {
-        responseSnapshot =
-          (await healCacheOnRead(responseSnapshot, {}, { maxSymbols: 4 })) ??
-          responseSnapshot;
-      } catch {
-        // return cached snapshot if inline cross4h heal fails
-      }
-    }
-
     if (heal) {
       const shouldInlineHeal =
         snapshot &&
