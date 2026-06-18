@@ -6,27 +6,32 @@ import {
   recordGlobalRequest,
 } from "./lib/worker-request-guard";
 
-/** RSC / server-action requests must reach OpenNext; static HTML and /_next/* can use ASSETS. */
-function isOpenNextDynamicRequest(request: Request): boolean {
-  return (
-    request.headers.get("RSC") === "1" ||
-    request.headers.has("Next-Router-Prefetch") ||
-    request.headers.has("Next-Router-State-Tree") ||
-    request.headers.has("Next-Action")
-  );
+/** Server actions must reach OpenNext; everything else can use prebuilt ASSETS. */
+function isServerActionRequest(request: Request): boolean {
+  return request.headers.has("Next-Action");
 }
 
 async function tryServeAsset(
   request: Request,
   env: CloudflareEnv,
 ): Promise<Response | null> {
-  const path = new URL(request.url).pathname;
-  if (path.startsWith("/api/") || isOpenNextDynamicRequest(request)) {
+  if (request.method !== "GET" && request.method !== "HEAD") return null;
+
+  const url = new URL(request.url);
+  const path = url.pathname;
+  if (path.startsWith("/api/") || isServerActionRequest(request)) {
     return null;
   }
 
   try {
-    const asset = await env.ASSETS.fetch(request);
+    let asset = await env.ASSETS.fetch(request);
+    if (asset.status === 404 && !path.includes(".")) {
+      const indexUrl = new URL(request.url);
+      indexUrl.pathname = "/index.html";
+      asset = await env.ASSETS.fetch(
+        new Request(indexUrl.toString(), { method: request.method, headers: request.headers }),
+      );
+    }
     if (asset.status !== 404) return asset;
   } catch {
     // fall through to OpenNext handler

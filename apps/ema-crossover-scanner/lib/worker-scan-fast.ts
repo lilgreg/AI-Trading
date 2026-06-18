@@ -55,6 +55,29 @@ async function buildStatusPayload(
   };
 }
 
+async function buildEmptyScanPayload(
+  bucket: R2Bucket,
+): Promise<Record<string, unknown>> {
+  const status = await buildStatusPayload(bucket);
+  return {
+    scannedAt: status.scannedAt ?? new Date(0).toISOString(),
+    symbolCount: (status.symbolCount as number) ?? 0,
+    results: [],
+    sources: {
+      blueChips: false,
+      watchlist: false,
+      custom: false,
+      tradingViewWatchlist: false,
+    },
+    scanComplete: false,
+    retryableCount: 0,
+    unscannedCount: 0,
+    chartRefreshPendingCount: 0,
+    cross4hGapCount: 0,
+    ...status,
+  };
+}
+
 /** Serve scan API from R2 directly — bypasses OpenNext (free-tier 10ms CPU → 1102). */
 async function tryServeScanApi(
   request: Request,
@@ -83,7 +106,14 @@ async function tryServeScanApi(
   }
 
   const cached = await bucket.get(CACHED_SCAN_API_KEY);
-  if (!cached) return null;
+  if (!cached) {
+    const payload = await buildEmptyScanPayload(bucket);
+    return Response.json(payload, {
+      headers: {
+        "Cache-Control": `private, max-age=${SCAN_READ_CACHE_MAX_AGE_SEC}`,
+      },
+    });
+  }
 
   return new Response(cached.body, {
     status: 200,
