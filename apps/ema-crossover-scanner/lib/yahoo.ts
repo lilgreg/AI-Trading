@@ -552,24 +552,27 @@ function computeSessionChanges(quote: Record<string, unknown>): QuoteSessionChan
   const regularMarketPrice = num("regularMarketPrice");
   const postMarketPrice = num("postMarketPrice");
 
-  const preMarketChange =
-    num("preMarketChangePercent") ??
-    (preMarketPrice != null && previousClose != null
+  const preFromPrices =
+    preMarketPrice != null && previousClose != null
       ? percentChange(preMarketPrice, previousClose)
-      : null);
+      : null;
+  const preMarketChange =
+    preFromPrices ?? num("preMarketChangePercent") ?? null;
 
-  const regularMarketChange =
-    num("regularMarketChangePercent") ??
-    (regularMarketPrice != null && previousClose != null
+  const regularFromPrices =
+    regularMarketPrice != null && previousClose != null
       ? percentChange(regularMarketPrice, previousClose)
-      : null);
+      : null;
+  const regularMarketChange =
+    regularFromPrices ?? num("regularMarketChangePercent") ?? null;
 
   const regularClose = regularMarketPrice ?? null;
-  const postMarketChange =
-    num("postMarketChangePercent") ??
-    (postMarketPrice != null && regularClose != null
+  const postFromPrices =
+    postMarketPrice != null && regularClose != null
       ? percentChange(postMarketPrice, regularClose)
-      : null);
+      : null;
+  const postMarketChange =
+    postFromPrices ?? num("postMarketChangePercent") ?? null;
 
   return { preMarketChange, regularMarketChange, postMarketChange };
 }

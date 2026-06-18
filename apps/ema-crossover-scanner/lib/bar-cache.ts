@@ -47,3 +47,14 @@ export function setCachedHourlyBars(
 export function clearBarCache(): void {
   cache.clear();
 }
+
+export function clearBarCacheForSymbol(symbol: string, days?: number): void {
+  if (days != null) {
+    cache.delete(cacheKey(symbol, days));
+    return;
+  }
+  const prefix = `${symbol.toUpperCase()}:`;
+  for (const key of [...cache.keys()]) {
+    if (key.startsWith(prefix)) cache.delete(key);
+  }
+}

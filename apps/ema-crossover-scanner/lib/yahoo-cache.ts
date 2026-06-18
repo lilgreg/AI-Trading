@@ -1,3 +1,4 @@
+import { clearBarCacheForSymbol } from "./bar-cache";
 import { getScanStorage } from "./scan-storage";
 
 export type YahooCacheKind =
@@ -111,6 +112,7 @@ export async function invalidateYahooChartCache(
   for (const kind of kinds) {
     await deleteYahooCached(kind, cacheId);
   }
+  clearBarCacheForSymbol(symbol.toUpperCase(), days);
 }
 
 /** Read-through cache: memory → R2 → fetchFn, then persist. */
