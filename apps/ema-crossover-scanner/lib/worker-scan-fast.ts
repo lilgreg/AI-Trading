@@ -1,7 +1,7 @@
 import {
   CACHED_SCAN_API_KEY,
-} from "./lib/scan-api-cache";
-import { LOCK_KEY, META_KEY } from "./lib/scan-storage";
+} from "./scan-api-cache";
+import { LOCK_KEY, META_KEY } from "./scan-storage";
 
 const SCAN_READ_CACHE_MAX_AGE_SEC = 45;
 const LOCK_TTL_MS = 15 * 60 * 1000;
