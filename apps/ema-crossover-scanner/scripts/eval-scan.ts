@@ -99,6 +99,12 @@ function runSessionSanityChecks(): void {
   );
   console.log(`ah during closed: ${ahClosed.postMarketChange}`);
 
+  const ahPre = filterSessionChangesForMarket(
+    { preMarketChange: 1.2, regularMarketChange: 0.5, postMarketChange: -0.3 },
+    "pre",
+  );
+  console.log(`ah during pre-market: ${ahPre.postMarketChange}`);
+
   const stooqErr =
     "All chart providers failed for AMT (stooq): stooq: Stooq bot wall";
   console.log(`sanitize: ${sanitizeChartError(stooqErr)}`);

@@ -130,26 +130,48 @@ async function fetchSessionChangesFromChartUncached(
     const sessionDay = sortedDays.at(-1);
     if (!sessionDay) return null;
 
-    const dayBars = byDay.get(sessionDay) ?? [];
-    const preBars = dayBars.filter((b) => {
-      const m = nyMinutesSinceMidnight(b.date);
-      return m >= 4 * 60 && m < regStart;
-    });
-    const regBars = dayBars.filter((b) => {
-      const m = nyMinutesSinceMidnight(b.date);
-      return m >= regStart && m < regEnd;
-    });
-    const ahBars = dayBars.filter((b) => {
-      const m = nyMinutesSinceMidnight(b.date);
-      return m >= regEnd && m < ahEnd;
-    });
+    const dayBarsFor = (day: string) => byDay.get(day) ?? [];
+    const ahBarsFor = (day: string) =>
+      dayBarsFor(day).filter((b) => {
+        const m = nyMinutesSinceMidnight(b.date);
+        return m >= regEnd && m < ahEnd;
+      });
+    const regBarsFor = (day: string) =>
+      dayBarsFor(day).filter((b) => {
+        const m = nyMinutesSinceMidnight(b.date);
+        return m >= regStart && m < regEnd;
+      });
+    const preBarsFor = (day: string) =>
+      dayBarsFor(day).filter((b) => {
+        const m = nyMinutesSinceMidnight(b.date);
+        return m >= 4 * 60 && m < regStart;
+      });
+
+    const dayBars = dayBarsFor(sessionDay);
+    const preBars = preBarsFor(sessionDay);
+    const regBars = regBarsFor(sessionDay);
+    let ahBars = ahBarsFor(sessionDay);
 
     const preMarketPrice = preBars.at(-1)?.close ?? num(meta?.preMarketPrice);
-    const regularClose =
+    let regularClose =
       regBars.at(-1)?.close ??
       num(meta?.regularMarketPrice) ??
       num(meta?.previousClose);
-    const postMarketPrice = ahBars.at(-1)?.close ?? num(meta?.postMarketPrice);
+    let postMarketPrice = ahBars.at(-1)?.close ?? num(meta?.postMarketPrice);
+
+    // Pre-market / early session: today's AH not started — use prior session day.
+    if (postMarketPrice == null && sortedDays.length >= 2) {
+      const priorDay = sortedDays.at(-2);
+      if (priorDay) {
+        const priorAh = ahBarsFor(priorDay);
+        const priorRegClose = regBarsFor(priorDay).at(-1)?.close ?? null;
+        if (priorAh.length > 0) {
+          ahBars = priorAh;
+          postMarketPrice = priorAh.at(-1)?.close ?? null;
+          if (regularClose == null) regularClose = priorRegClose;
+        }
+      }
+    }
 
     const preMarketChange =
       preMarketPrice != null && previousClose != null

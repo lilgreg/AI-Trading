@@ -28,6 +28,7 @@ import {
   scheduleBackgroundTask,
   scheduleScanJob,
 } from "@/lib/scan-scheduler";
+import { shouldShowAfterHours } from "@/lib/market-session";
 import { enrichSnapshotSessions } from "@/lib/session-snapshot";
 import {
   applyQuoteUpdates,
@@ -59,10 +60,13 @@ async function enrichScanResponseQuotes(
     const existingBySymbol = new Map(
       current.results.map((row) => [row.symbol, row]),
     );
+    const needsAfterHours = shouldShowAfterHours();
     const quoteTargets = current.results.filter(
       (row) =>
         !row.error &&
-        (row.price == null || isStaleSessionSnapshot(row.sessionSnapshotDate)),
+        (row.price == null ||
+          isStaleSessionSnapshot(row.sessionSnapshotDate) ||
+          (needsAfterHours && row.postMarketChange == null)),
     );
     if (quoteTargets.length === 0) return current;
 

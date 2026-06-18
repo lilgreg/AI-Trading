@@ -82,11 +82,15 @@ export function shouldShowPre(
   );
 }
 
-/** After-hours % visible during AH and overnight closed until next 4 AM ET. */
+/** After-hours % visible during AH, overnight closed, and pre-market (prior session AH). */
 export function shouldShowAfterHours(
   session: UsMarketSession = getUsMarketSession(),
 ): boolean {
-  return session === "afterHours" || session === "closed";
+  return (
+    session === "afterHours" ||
+    session === "closed" ||
+    session === "pre"
+  );
 }
 
 /** Regular session % visible from pre-market onward (yesterday's completed move). */
@@ -105,7 +109,7 @@ export function shouldShowRegular(
  * Session column visibility rules (ET):
  * - Pre: show when we have data — persists through closed overnight until next 4 AM ET
  * - Reg: show during regular + AH + closed (completed regular move)
- * - AH: show during AH + closed overnight until next 4 AM
+ * - AH: show during AH + closed overnight + pre-market (yesterday's AH until today's AH starts)
  */
 export function filterSessionChangesForMarket(
   changes: SessionChanges,

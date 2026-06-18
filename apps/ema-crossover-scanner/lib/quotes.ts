@@ -18,7 +18,13 @@ export async function fetchQuoteUpdates(
     limit?: number;
     existingBySymbol?: Map<
       string,
-      Pick<StockScanResult, "sessionSnapshotDate">
+      Pick<
+        StockScanResult,
+        | "sessionSnapshotDate"
+        | "preMarketChange"
+        | "regularMarketChange"
+        | "postMarketChange"
+      >
     >;
   } = {},
 ): Promise<QuoteUpdate[]> {
@@ -64,9 +70,9 @@ export async function fetchQuoteUpdates(
     const resolved = await resolveSessionChanges(
       {
         symbol,
-        preMarketChange: meta.preMarketChange,
-        regularMarketChange: meta.regularMarketChange,
-        postMarketChange: meta.postMarketChange,
+        preMarketChange: existing?.preMarketChange ?? null,
+        regularMarketChange: existing?.regularMarketChange ?? null,
+        postMarketChange: existing?.postMarketChange ?? null,
         sessionSnapshotDate: existing?.sessionSnapshotDate ?? null,
       },
       {
