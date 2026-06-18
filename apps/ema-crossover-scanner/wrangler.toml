@@ -34,9 +34,9 @@ crons = [
   "15 0 * * *",
 ]
 
-# Paid Workers: extend CPU for long scan API routes (up to 300s). Free tier: ~30s HTTP limit.
-# [limits]
-# cpu_ms = 300000
+# Paid Workers: extend CPU for OpenNext SSR + scan API (free tier caps at 10ms → 1102).
+[limits]
+cpu_ms = 300000
 
 [observability]
 enabled = true

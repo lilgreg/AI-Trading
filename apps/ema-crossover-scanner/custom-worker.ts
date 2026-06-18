@@ -5,6 +5,34 @@ import {
   recordGlobalRequest,
 } from "./lib/worker-request-guard";
 
+/** RSC / server-action requests must reach OpenNext; static HTML and /_next/* can use ASSETS. */
+function isOpenNextDynamicRequest(request: Request): boolean {
+  return (
+    request.headers.get("RSC") === "1" ||
+    request.headers.has("Next-Router-Prefetch") ||
+    request.headers.has("Next-Router-State-Tree") ||
+    request.headers.has("Next-Action")
+  );
+}
+
+async function tryServeAsset(
+  request: Request,
+  env: CloudflareEnv,
+): Promise<Response | null> {
+  const path = new URL(request.url).pathname;
+  if (path.startsWith("/api/") || isOpenNextDynamicRequest(request)) {
+    return null;
+  }
+
+  try {
+    const asset = await env.ASSETS.fetch(request);
+    if (asset.status !== 404) return asset;
+  } catch {
+    // fall through to OpenNext handler
+  }
+  return null;
+}
+
 /** Cron chunk schedule — small slices to stay under Workers subrequest limits. */
 const SCAN_CRON_CHUNKS: Record<string, { offset: number; limit: number }> = {
   "0 0 * * *": { offset: 0, limit: 12 },
@@ -15,6 +43,9 @@ const SCAN_CRON_CHUNKS: Record<string, { offset: number; limit: number }> = {
 
 export default {
   async fetch(request: Request, env: CloudflareEnv, ctx: ExecutionContext) {
+    const asset = await tryServeAsset(request, env);
+    if (asset) return asset;
+
     const guard = guardWorkerRequest(request.url);
     if (!guard.allowed) {
       return new Response(

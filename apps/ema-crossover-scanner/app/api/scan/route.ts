@@ -393,22 +393,10 @@ export async function GET(request: NextRequest) {
       } catch {
         // best-effort quote enrich for table display
       }
-    } else if (
-      responseSnapshot?.results?.some(
-        (row) => isStaleSessionSnapshot(row.sessionSnapshotDate),
-      )
-    ) {
-      try {
-        responseSnapshot = await enrichScanResponseQuotes(responseSnapshot, {
-          persist: true,
-        });
-      } catch {
-        // best-effort stale session refresh
-      }
     }
 
     responseSnapshot = await applyCross4hFallback(responseSnapshot, {
-      persist: true,
+      persist: heal,
     });
 
     const cacheControl =
