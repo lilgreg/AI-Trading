@@ -7,7 +7,8 @@ export type YahooCacheKind =
   | "chart-spark"
   | "chart-v8-range"
   | "session-chart"
-  | "news";
+  | "news"
+  | "news-preview";
 
 interface CacheEnvelope<T = unknown> {
   fetchedAt: number;
@@ -18,7 +19,7 @@ interface CacheEnvelope<T = unknown> {
 const memory = new Map<string, CacheEnvelope>();
 
 const QUOTE_KINDS = new Set<YahooCacheKind>(["quote", "quote-v8"]);
-const NEWS_KINDS = new Set<YahooCacheKind>(["news"]);
+const NEWS_KINDS = new Set<YahooCacheKind>(["news", "news-preview"]);
 
 function parseTtlMs(raw: string | undefined, fallback: number): number {
   const ms = Number(raw ?? fallback);
@@ -28,7 +29,7 @@ function parseTtlMs(raw: string | undefined, fallback: number): number {
 
 export function getYahooCacheTtlMsForKind(kind: YahooCacheKind): number {
   if (QUOTE_KINDS.has(kind)) {
-    return parseTtlMs(process.env.YAHOO_QUOTE_CACHE_TTL_MS, 120_000);
+    return parseTtlMs(process.env.YAHOO_QUOTE_CACHE_TTL_MS, 900_000);
   }
   if (NEWS_KINDS.has(kind)) {
     return parseTtlMs(process.env.YAHOO_NEWS_CACHE_TTL_MS, 120_000);

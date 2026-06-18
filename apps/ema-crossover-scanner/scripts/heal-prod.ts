@@ -33,11 +33,13 @@ function hasCross(cross?: { crossoverAt?: string | null; crossoverDate?: string 
 function countCross4hGaps(
   results: {
     symbol?: string;
-    ema20Above50?: boolean;
+    cross1h?: { crossoverAt?: string | null; crossoverDate?: string | null };
     cross4h?: { crossoverAt?: string | null; crossoverDate?: string | null };
   }[],
 ): { count: number; symbols: string[] } {
-  const gaps = results.filter((row) => row.ema20Above50 && !hasCross(row.cross4h));
+  const gaps = results.filter(
+    (row) => hasCross(row.cross1h) && !hasCross(row.cross4h),
+  );
   return { count: gaps.length, symbols: gaps.map((r) => r.symbol ?? "?") };
 }
 
@@ -146,6 +148,38 @@ async function rescanSymbols(symbols: string[]): Promise<void> {
   }
 }
 
+async function rescanCross4hGaps(): Promise<number> {
+  const res = await fetch(`${BASE}/api/scan`, { cache: "no-store" });
+  const data = (await res.json()) as {
+    results?: {
+      symbol?: string;
+      cross1h?: { crossoverAt?: string | null; crossoverDate?: string | null };
+      cross4h?: { crossoverAt?: string | null; crossoverDate?: string | null };
+    }[];
+  };
+  const gaps =
+    data.results?.filter((row) => hasCross(row.cross1h) && !hasCross(row.cross4h)) ?? [];
+  console.log(`Rescanning ${gaps.length} cross4h gap symbols (batch 10, 3s delay)`);
+  for (let i = 0; i < gaps.length; i += 10) {
+    const batch = gaps.slice(i, i + 10);
+    for (const row of batch) {
+      if (!row.symbol) continue;
+      console.log("  rescan", row.symbol);
+      try {
+        const r = await fetch(
+          `${BASE}/api/scan/symbol?symbol=${encodeURIComponent(row.symbol)}`,
+          { cache: "no-store" },
+        );
+        console.log("    ", r.status);
+      } catch (err) {
+        console.log("    error", err instanceof Error ? err.message : err);
+      }
+      await new Promise((r) => setTimeout(r, 3_000));
+    }
+  }
+  return gaps.length;
+}
+
 async function main() {
   for (let round = 1; round <= MAX_ROUNDS; round += 1) {
     console.log(`\n=== heal round ${round}/${MAX_ROUNDS} ===`);
@@ -161,6 +195,8 @@ async function main() {
     ];
     if (toRescan.length > 0 && round % 2 === 1) {
       await rescanSymbols(toRescan);
+    } else if (counts.cross4hGap > 0 && round === 1) {
+      await rescanCross4hGaps();
     }
 
     if (round < MAX_ROUNDS) {

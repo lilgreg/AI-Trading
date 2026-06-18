@@ -466,11 +466,18 @@ const HEAL_RESCAN_DELAY_MS = 800;
 const HEAL_LOCK_RETRY_MS = 2_000;
 const HEAL_LOCK_RETRIES = 3;
 
+function hasCrossoverField(
+  cross?: { crossoverAt?: string | null; crossoverDate?: string | null },
+): boolean {
+  return Boolean(cross?.crossoverAt ?? cross?.crossoverDate);
+}
+
 export function rowNeedsCross4hRescan(row: StockScanResult): boolean {
   if (row.error) return false;
+  const has4h = hasCrossoverField(row.cross4h);
+  if (hasCrossoverField(row.cross1h) && !has4h) return true;
   if (!row.ema20Above50) return false;
-  const cross4h = row.cross4h?.crossoverAt ?? row.cross4h?.crossoverDate;
-  return !cross4h;
+  return !has4h;
 }
 
 export function countCross4hGapRows(results: StockScanResult[]): number {

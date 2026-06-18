@@ -14,8 +14,15 @@ function isFresh(entry: PreviewEntry): boolean {
   return Date.now() - entry.fetchedAt < CACHE_TTL_MS;
 }
 
-async function requestPreview(url: string, signal?: AbortSignal): Promise<string | null> {
-  const res = await fetch(`/api/news/preview?url=${encodeURIComponent(url)}`, {
+async function requestPreview(
+  url: string,
+  options?: { headline?: string; yahooSummary?: string | null },
+  signal?: AbortSignal,
+): Promise<string | null> {
+  const qs = new URLSearchParams({ url });
+  if (options?.headline) qs.set("headline", options.headline);
+  if (options?.yahooSummary) qs.set("yahooSummary", options.yahooSummary);
+  const res = await fetch(`/api/news/preview?${qs.toString()}`, {
     signal,
     cache: "no-store",
   });
@@ -33,8 +40,16 @@ export function getCachedNewsPreview(url: string): string | null {
   return entry.summary;
 }
 
+export interface NewsPreviewOptions {
+  headline?: string;
+  yahooSummary?: string | null;
+}
+
 /** Fire-and-forget preview fetch (e.g. on chip hover). */
-export function prefetchNewsPreview(url: string): void {
+export function prefetchNewsPreview(
+  url: string,
+  options?: NewsPreviewOptions,
+): void {
   if (!url) return;
   const entry = cache.get(url);
   if (entry && isFresh(entry) && entry.summary && entry.summary.length >= MIN_USEFUL_PREVIEW_LEN) {
@@ -42,7 +57,7 @@ export function prefetchNewsPreview(url: string): void {
   }
   if (inflight.has(url)) return;
 
-  const promise = requestPreview(url).catch(() => null);
+  const promise = requestPreview(url, options).catch(() => null);
   inflight.set(url, promise);
   void promise.finally(() => {
     inflight.delete(url);
@@ -53,6 +68,7 @@ export function prefetchNewsPreview(url: string): void {
 export async function fetchNewsPreview(
   url: string,
   signal?: AbortSignal,
+  options?: NewsPreviewOptions,
 ): Promise<string | null> {
   const cached = getCachedNewsPreview(url);
   if (cached) return cached;
@@ -60,7 +76,7 @@ export async function fetchNewsPreview(
   const pending = inflight.get(url);
   if (pending) return pending;
 
-  const promise = requestPreview(url, signal);
+  const promise = requestPreview(url, options, signal);
   inflight.set(url, promise);
   try {
     return await promise;
@@ -73,6 +89,7 @@ export async function fetchNewsPreview(
 export async function fetchNewsPreviewFresh(
   url: string,
   signal?: AbortSignal,
+  options?: NewsPreviewOptions,
 ): Promise<string | null> {
-  return requestPreview(url, signal);
+  return requestPreview(url, options, signal);
 }

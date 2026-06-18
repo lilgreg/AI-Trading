@@ -29,7 +29,9 @@ function hasCross(cross?: { crossoverAt?: string | null; crossoverDate?: string 
 }
 
 function countCross4hGaps(results: ScanRow[]): number {
-  return results.filter((row) => row.ema20Above50 && !hasCross(row.cross4h)).length;
+  return results.filter(
+    (row) => hasCross(row.cross1h) && !hasCross(row.cross4h),
+  ).length;
 }
 
 function crossoverMsAgo(cross?: ScanRow["cross4h"]): number | null {
@@ -62,10 +64,12 @@ function verifySortedCross4hRows(results: ScanRow[]): {
   for (const idx of indexes) {
     const row = sorted[idx];
     if (!row) continue;
-    const ok = !row.ema20Above50 || hasCross(row.cross4h);
+    const has1h = hasCross(row.cross1h);
+    const has4h = hasCross(row.cross4h);
+    const ok = !has1h || has4h;
     if (!ok) pass = false;
     samples.push(
-      `row${idx + 1} ${row.symbol}: above=${row.ema20Above50} cross4h=${row.cross4h?.crossoverAt ?? "—"}`,
+      `row${idx + 1} ${row.symbol}: cross1h=${row.cross1h?.crossoverAt ?? "—"} cross4h=${row.cross4h?.crossoverAt ?? "—"}`,
     );
   }
 
@@ -164,8 +168,11 @@ async function verifyNewsPreview(): Promise<{ pass: boolean; previewLen: number;
 
   for (let i = 0; i < 3; i += 1) {
     const t0 = Date.now();
+    const previewQs = new URLSearchParams({ url: article.url });
+    if (article.headline) previewQs.set("headline", article.headline);
+    if (article.summary) previewQs.set("yahooSummary", article.summary);
     const res = await fetch(
-      `${BASE}/api/news/preview?url=${encodeURIComponent(article.url)}`,
+      `${BASE}/api/news/preview?${previewQs.toString()}`,
       { cache: "no-store" },
     );
     const ms = Date.now() - t0;

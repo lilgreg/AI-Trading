@@ -1371,8 +1371,18 @@ export default function HomePage() {
                   key={headlineId}
                   type="button"
                   className={`news-chip${isNew ? " news-chip-new" : ""}`}
-                  onMouseEnter={() => prefetchNewsPreview(item.url)}
-                  onFocus={() => prefetchNewsPreview(item.url)}
+                  onMouseEnter={() =>
+                    prefetchNewsPreview(item.url, {
+                      headline: item.headline,
+                      yahooSummary: item.summary,
+                    })
+                  }
+                  onFocus={() =>
+                    prefetchNewsPreview(item.url, {
+                      headline: item.headline,
+                      yahooSummary: item.summary,
+                    })
+                  }
                   onClick={() =>
                     setSelectedNewsArticle({
                       ...item,

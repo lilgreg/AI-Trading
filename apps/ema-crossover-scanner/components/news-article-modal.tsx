@@ -88,7 +88,11 @@ export function NewsArticleModal({ article, onClose }: NewsArticleModalProps) {
 
     void (async () => {
       try {
-        const preview = await fetchNewsPreviewFresh(article.url, controller.signal);
+        const preview = await fetchNewsPreviewFresh(
+          article.url,
+          controller.signal,
+          { headline: article.headline, yahooSummary: article.summary },
+        );
         if (cancelled) return;
         applyBest(yahooSummary, preview);
       } catch {

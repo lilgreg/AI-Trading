@@ -7,8 +7,8 @@ export interface PollIntervals {
 }
 
 export const DEFAULT_NEWS_POLL_MS = 120_000;
-export const DEFAULT_NEWS_POLL_MS_OFF = 300_000;
-export const DEFAULT_QUOTES_POLL_MS_MARKET = 90_000;
+export const DEFAULT_NEWS_POLL_MS_OFF = 120_000;
+export const DEFAULT_QUOTES_POLL_MS_MARKET = 60_000;
 export const DEFAULT_QUOTES_POLL_MS_OFF = 180_000;
 export const DEFAULT_STATUS_POLL_MS = 180_000;
 export const MIN_POLL_MS = 10_000;

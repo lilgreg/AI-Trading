@@ -1,12 +1,15 @@
+import { createHash } from "node:crypto";
 import { NextResponse } from "next/server";
 import { Agent, fetch as undiciFetch } from "undici";
 import { isCloudflareWorkersRuntime } from "@/lib/runtime";
+import { getYahooCached, setYahooCached } from "@/lib/yahoo-cache";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 15;
 
 const PREVIEW_TIMEOUT_MS = 10_000;
 const MAX_SUMMARY_LEN = 6_000;
+const MIN_USEFUL_LEN = 200;
 const PREVIEW_USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
@@ -73,7 +76,6 @@ function extractJsonLdText(html: string): string | null {
   return best || null;
 }
 
-/** Pull paragraph text from article/main content regions. */
 function extractYahooNextArticleBody(html: string): string | null {
   const match = html.match(
     /<script id=["']__NEXT_DATA__["'][^>]*>([\s\S]*?)<\/script>/i,
@@ -140,7 +142,6 @@ async function fetchPreviewHtml(url: string): Promise<string | null> {
   return res.text();
 }
 
-/** Pull paragraph text from article/main content regions. */
 function extractArticleParagraphs(html: string): string | null {
   const regionPattern =
     /<(article|main|div)[^>]*(?:class|id)=["'][^"']*(?:article|story|content|post-body|entry-content)[^"']*["'][^>]*>([\s\S]*?)<\/\1>/gi;
@@ -182,8 +183,52 @@ function longestText(...candidates: (string | null | undefined)[]): string | nul
   return best || null;
 }
 
+function buildFallbackSummary(
+  headline?: string | null,
+  yahooSummary?: string | null,
+): string | null {
+  const parts: string[] = [];
+  const summary = yahooSummary?.trim();
+  const title = headline?.trim();
+  if (summary && summary.length >= MIN_USEFUL_LEN) parts.push(summary);
+  else if (title && summary) parts.push(`${title}\n\n${summary}`);
+  else if (summary) parts.push(summary);
+  else if (title) parts.push(title);
+  return parts.join("\n\n").trim() || null;
+}
+
+function trimSummary(summary: string | null): string | null {
+  if (!summary) return null;
+  if (summary.length <= MAX_SUMMARY_LEN) return summary;
+  return `${summary.slice(0, MAX_SUMMARY_LEN).trim()}…`;
+}
+
+function previewCacheId(url: string): string {
+  return createHash("sha256").update(url).digest("hex").slice(0, 32);
+}
+
+async function scrapeSummary(url: string): Promise<string | null> {
+  const html = await fetchPreviewHtml(url);
+  if (!html) return null;
+
+  const metaSummary = longestText(
+    extractMetaContent(html, "property", "og:description"),
+    extractMetaContent(html, "name", "description"),
+    extractMetaContent(html, "name", "twitter:description"),
+    extractMetaContent(html, "property", "article:description"),
+  );
+
+  return longestText(
+    metaSummary ? decodeHtmlEntities(metaSummary) : null,
+    extractYahooNextArticleBody(html),
+    extractJsonLdText(html),
+    extractArticleParagraphs(html),
+  );
+}
+
 export async function GET(request: Request) {
-  const urlParam = new URL(request.url).searchParams.get("url");
+  const params = new URL(request.url).searchParams;
+  const urlParam = params.get("url");
   if (!urlParam) {
     return NextResponse.json({ error: "Missing url" }, { status: 400 });
   }
@@ -199,33 +244,32 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "Invalid url protocol" }, { status: 400 });
   }
 
+  const headline = params.get("headline");
+  const yahooSummary = params.get("yahooSummary");
+  const cacheId = previewCacheId(target.toString());
+
   try {
-    const html = await fetchPreviewHtml(target.toString());
-    if (!html) {
-      return NextResponse.json({ summary: null });
+    const cached = await getYahooCached<{ summary: string | null }>(
+      "news-preview",
+      cacheId,
+    );
+    if (cached?.summary && cached.summary.length >= MIN_USEFUL_LEN) {
+      return NextResponse.json({ summary: cached.summary });
     }
 
-    const metaSummary = longestText(
-      extractMetaContent(html, "property", "og:description"),
-      extractMetaContent(html, "name", "description"),
-      extractMetaContent(html, "name", "twitter:description"),
-      extractMetaContent(html, "property", "article:description"),
+    const scraped = await scrapeSummary(target.toString());
+    const fallback = buildFallbackSummary(headline, yahooSummary);
+    const summary = trimSummary(
+      longestText(scraped, fallback) ?? fallback,
     );
 
-    const summary = longestText(
-      metaSummary ? decodeHtmlEntities(metaSummary) : null,
-      extractYahooNextArticleBody(html),
-      extractJsonLdText(html),
-      extractArticleParagraphs(html),
-    );
+    if (summary && summary.length >= MIN_USEFUL_LEN) {
+      await setYahooCached("news-preview", cacheId, { summary });
+    }
 
-    const trimmed =
-      summary && summary.length > MAX_SUMMARY_LEN
-        ? `${summary.slice(0, MAX_SUMMARY_LEN).trim()}…`
-        : summary;
-
-    return NextResponse.json({ summary: trimmed });
+    return NextResponse.json({ summary: summary ?? null });
   } catch {
-    return NextResponse.json({ summary: null });
+    const fallback = trimSummary(buildFallbackSummary(headline, yahooSummary));
+    return NextResponse.json({ summary: fallback });
   }
 }

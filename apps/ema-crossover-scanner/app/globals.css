@@ -375,7 +375,7 @@ table.scan-table tbody tr:hover {
 .news-modal-body {
   position: relative;
   flex: 1 1 auto;
-  min-height: 60vh;
+  min-height: 0;
   max-height: 80vh;
   overflow-y: auto;
   padding: 1.25rem 1.5rem;
@@ -384,16 +384,11 @@ table.scan-table tbody tr:hover {
 .news-modal-summary {
   display: block;
   margin: 0;
-  min-height: 60vh;
-  max-height: 80vh;
   font-size: 0.9375rem;
   line-height: 1.65;
   color: var(--text);
   white-space: pre-wrap;
-  overflow-y: auto;
-  overflow-x: hidden;
-  -webkit-line-clamp: unset;
-  -webkit-box-orient: unset;
+  overflow: visible;
   word-break: break-word;
   transition: opacity 0.2s ease;
 }
