@@ -4,7 +4,7 @@ import { resolveSessionChanges } from "./session-snapshot";
 import { resolveYahooChartSymbol } from "./stocks";
 import type { StockScanResult } from "./types";
 import { deleteYahooCached } from "./yahoo-cache";
-import { fetchBatchQuoteMeta } from "./yahoo";
+import { fetchBatchQuoteMeta, fetchQuoteMeta } from "./yahoo";
 
 export type { QuoteUpdate } from "./quote-updates";
 
@@ -41,17 +41,20 @@ export async function fetchQuoteUpdates(
   const updates: QuoteUpdate[] = [];
 
   for (const symbol of slice) {
-    const meta = metaBySymbol.get(symbol) ?? {
-      name: null,
-      price: null,
-      exchange: null,
-      quoteExchange: null,
-      dailyChange: null,
-      preMarketChange: null,
-      regularMarketChange: null,
-      postMarketChange: null,
-    };
     const existing = options.existingBySymbol?.get(symbol);
+    const staleSession = isStaleSessionSnapshot(existing?.sessionSnapshotDate ?? null);
+    const meta = staleSession
+      ? await fetchQuoteMeta(symbol, { refreshSession: true })
+      : (metaBySymbol.get(symbol) ?? {
+          name: null,
+          price: null,
+          exchange: null,
+          quoteExchange: null,
+          dailyChange: null,
+          preMarketChange: null,
+          regularMarketChange: null,
+          postMarketChange: null,
+        });
     const resolved = await resolveSessionChanges(
       {
         symbol,
