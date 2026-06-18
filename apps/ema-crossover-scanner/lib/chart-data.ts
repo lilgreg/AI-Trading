@@ -21,6 +21,7 @@ import {
   fetchYahooChartV8Range,
   fetchYahooSparkHourlyBars,
   YAHOO_CHART_TIMEOUT_MS,
+  YAHOO_RETRY_TIMEOUT_MS,
 } from "./yahoo";
 
 export type Bar = OhlcBar;
@@ -61,16 +62,21 @@ function skipYahooProviders(): boolean {
   return process.env.CHART_SKIP_YAHOO === "1" || process.env.CHART_SKIP_YAHOO === "true";
 }
 
+function chartFetchTimeoutMs(options?: FetchHourlyBarsOptions): number {
+  return options?.skipChartCache ? YAHOO_RETRY_TIMEOUT_MS : YAHOO_CHART_TIMEOUT_MS;
+}
+
 /** Scan chart path uses direct Yahoo HTTP only — no yahoo-finance2 library. */
 function yahooProviders(): ChartProvider[] {
   if (skipYahooProviders()) return [];
 
+  const timeout = chartFetchTimeoutMs;
   return [
     {
       name: "yahoo-v8",
       fetch: (symbol, days, options) =>
         yahooLimiter.run(() =>
-          fetchYahooChartV8Direct(symbol, days, YAHOO_CHART_TIMEOUT_MS, {
+          fetchYahooChartV8Direct(symbol, days, timeout(options), {
             skipCache: options?.skipChartCache,
           }),
         ),
@@ -79,7 +85,7 @@ function yahooProviders(): ChartProvider[] {
       name: "yahoo-spark",
       fetch: (symbol, days, options) =>
         yahooLimiter.run(() =>
-          fetchYahooSparkHourlyBars(symbol, days, YAHOO_CHART_TIMEOUT_MS, {
+          fetchYahooSparkHourlyBars(symbol, days, timeout(options), {
             skipCache: options?.skipChartCache,
           }),
         ),
@@ -88,7 +94,7 @@ function yahooProviders(): ChartProvider[] {
       name: "yahoo-v8-range",
       fetch: (symbol, days, options) =>
         yahooLimiter.run(() =>
-          fetchYahooChartV8Range(symbol, days, YAHOO_CHART_TIMEOUT_MS, {
+          fetchYahooChartV8Range(symbol, days, timeout(options), {
             skipCache: options?.skipChartCache,
           }),
         ),

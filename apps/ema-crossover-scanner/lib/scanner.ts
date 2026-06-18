@@ -25,6 +25,16 @@ import { aggregateHourlyTo4h, fetchQuoteMeta } from "./yahoo";
 const FAST_EMA = 20;
 const SLOW_EMA = 50;
 const MIN_HOURLY_BARS = SLOW_EMA + 5;
+/** Enough 4h buckets to resolve historical crosses (not just latest EMA). */
+const MIN_4H_BARS_FOR_CROSS = SLOW_EMA + 80;
+
+function count4hBars(hourly: { close: number; date: Date }[]): number {
+  return aggregateHourlyTo4h(hourly).length;
+}
+
+function hasEnough4hHistory(hourly: { close: number; date: Date }[]): boolean {
+  return count4hBars(hourly) >= MIN_4H_BARS_FOR_CROSS;
+}
 
 function historyDayFallbacks(baseDays: number): number[] {
   if (isCloudflareWorkersRuntime()) {
@@ -54,7 +64,15 @@ async function fetchHourlyBarsWithFallback(
       }
       if (
         result.bars.length >= MIN_HOURLY_BARS &&
+        hasEnough4hHistory(result.bars) &&
         !isCloudflareWorkersRuntime()
+      ) {
+        return result;
+      }
+      if (
+        isCloudflareWorkersRuntime() &&
+        result.bars.length >= MIN_HOURLY_BARS &&
+        hasEnough4hHistory(result.bars)
       ) {
         return result;
       }
@@ -63,7 +81,13 @@ async function fetchHourlyBarsWithFallback(
     }
   }
 
-  if (bestResult && bestResult.bars.length >= MIN_HOURLY_BARS) return bestResult;
+  if (
+    bestResult &&
+    bestResult.bars.length >= MIN_HOURLY_BARS &&
+    hasEnough4hHistory(bestResult.bars)
+  ) {
+    return bestResult;
+  }
   if (bestResult) return bestResult;
   return fetchHourlyBars(chartSymbol, historyDays, options);
 }
@@ -206,7 +230,7 @@ export async function scanSymbol(
       companyName: quoteFields.name,
     });
 
-    if (bars4h.length < MIN_HOURLY_BARS || hourly.length < MIN_HOURLY_BARS) {
+    if (bars4h.length < SLOW_EMA + 5 || hourly.length < MIN_HOURLY_BARS) {
       return {
         ...base,
         ...quoteFields,
