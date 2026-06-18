@@ -135,9 +135,10 @@ function allProviders(options: FetchHourlyBarsOptions = {}): ChartProvider[] {
   const yahoo = yahooProviders();
   const finnhub = configuredBackupProviders().filter((p) => p.name === "finnhub");
 
-  // Workers: one Yahoo endpoint + Finnhub — avoid 50 subrequest limit per invocation.
+  // Workers: one Yahoo endpoint for bulk scans; all Yahoo endpoints when bypassing cache (heal/rescan).
   if (isCloudflareWorkersRuntime()) {
-    return [...yahoo.slice(0, 1), ...finnhub];
+    const yahooSet = options.skipChartCache ? yahoo : yahoo.slice(0, 1);
+    return [...yahooSet, ...finnhub];
   }
 
   // Tail symbols: Yahoo v8 → spark → v8-range, then Finnhub only.
