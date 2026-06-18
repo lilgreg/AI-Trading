@@ -28,7 +28,9 @@ const MIN_HOURLY_BARS = SLOW_EMA + 5;
 
 function historyDayFallbacks(baseDays: number): number[] {
   if (isCloudflareWorkersRuntime()) {
-    return [...new Set([baseDays, Math.max(baseDays, 180)])].sort((a, b) => a - b);
+    return [...new Set([baseDays, Math.max(baseDays, 180), 365])].sort(
+      (a, b) => a - b,
+    );
   }
   return [...new Set([baseDays, 90, 120, 180, 270, 365])].sort((a, b) => a - b);
 }
@@ -39,19 +41,30 @@ async function fetchHourlyBarsWithFallback(
   options: { symbolIndex?: number; skipStagger?: boolean; skipChartCache?: boolean },
 ): Promise<Awaited<ReturnType<typeof fetchHourlyBars>>> {
   const fallbacks = historyDayFallbacks(historyDays);
-  let lastResult: Awaited<ReturnType<typeof fetchHourlyBars>> | null = null;
+  let bestResult: Awaited<ReturnType<typeof fetchHourlyBars>> | null = null;
 
   for (const days of fallbacks) {
     try {
       const result = await fetchHourlyBars(chartSymbol, days, options);
-      lastResult = result;
-      if (result.bars.length >= MIN_HOURLY_BARS) return result;
+      if (
+        !bestResult ||
+        result.bars.length > bestResult.bars.length
+      ) {
+        bestResult = result;
+      }
+      if (
+        result.bars.length >= MIN_HOURLY_BARS &&
+        !isCloudflareWorkersRuntime()
+      ) {
+        return result;
+      }
     } catch {
       // try longer lookback
     }
   }
 
-  if (lastResult) return lastResult;
+  if (bestResult && bestResult.bars.length >= MIN_HOURLY_BARS) return bestResult;
+  if (bestResult) return bestResult;
   return fetchHourlyBars(chartSymbol, historyDays, options);
 }
 
