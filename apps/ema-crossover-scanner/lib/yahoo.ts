@@ -830,7 +830,12 @@ export async function fetchBatchQuoteMeta(
 
   for (let i = 0; i < uncached.length; i += YAHOO_QUOTE_BATCH_SIZE) {
     const batch = uncached.slice(i, i + YAHOO_QUOTE_BATCH_SIZE);
-    const batchMap = await yahooLimiter.run(() => fetchV7QuoteBatchUncached(batch));
+    let batchMap: Map<string, QuoteMeta>;
+    try {
+      batchMap = await yahooLimiter.run(() => fetchV7QuoteBatchUncached(batch));
+    } catch {
+      batchMap = new Map();
+    }
 
     for (const sym of batch) {
       const chartSym = resolveYahooChartSymbol(sym);

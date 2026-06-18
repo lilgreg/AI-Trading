@@ -24,7 +24,8 @@ function parseOptionalInt(value: string | null): number | null {
 }
 
 export async function GET(request: NextRequest) {
-  const snapshot = await loadSnapshot();
+  try {
+    const snapshot = await loadSnapshot();
   if (!snapshot?.results?.length) {
     return NextResponse.json(
       { updatedAt: new Date().toISOString(), quotes: [] },
@@ -114,4 +115,8 @@ export async function GET(request: NextRequest) {
     },
     { headers: { "Cache-Control": "no-store" } },
   );
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Quote fetch failed";
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
 }

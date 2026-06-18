@@ -152,7 +152,7 @@ export async function scanSymbol(
   };
 
   try {
-    const meta = await fetchQuoteMeta(chartSymbol);
+    const meta = await fetchQuoteMeta(chartSymbol, { refreshSession: true });
     const sessionResolved = await resolveSessionChanges(
       {
         symbol: parsed.yahoo,
@@ -240,6 +240,12 @@ export async function scanSymbol(
       cross4hInfo =
         findLastAbovePeriodStart(bars4h, FAST_EMA, SLOW_EMA) ??
         findMostRecentBullishCrossover(bars4h, FAST_EMA, SLOW_EMA);
+    }
+    if (!cross4hInfo && cross1h.crossoverAt) {
+      cross4hInfo = {
+        date: new Date(cross1h.crossoverAt),
+        msAgo: cross1h.crossoverMsAgo ?? 0,
+      };
     }
     const cross4h = buildCrossoverDisplay(cross4hInfo);
 
