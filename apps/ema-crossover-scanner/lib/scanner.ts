@@ -34,7 +34,7 @@ function historyDayFallbacks(baseDays: number): number[] {
 async function fetchHourlyBarsWithFallback(
   chartSymbol: string,
   historyDays: number,
-  options: { symbolIndex?: number; skipStagger?: boolean },
+  options: { symbolIndex?: number; skipStagger?: boolean; skipChartCache?: boolean },
 ): Promise<Awaited<ReturnType<typeof fetchHourlyBars>>> {
   const fallbacks = historyDayFallbacks(historyDays);
   let lastResult: Awaited<ReturnType<typeof fetchHourlyBars>> | null = null;
@@ -107,7 +107,7 @@ export async function scanSymbol(
   historyDays: number,
   includePatternDebug = false,
   symbolIndex?: number,
-  options: { skipChartStagger?: boolean } = {},
+  options: { skipChartStagger?: boolean; skipChartCache?: boolean } = {},
 ): Promise<StockScanResult> {
   const tvSymbol = resolveTradingViewSymbol(parsed);
   const displayTicker = stripDisplayTicker(tvSymbol);
@@ -173,6 +173,7 @@ export async function scanSymbol(
       const chartResult = await fetchHourlyBarsWithFallback(chartSymbol, historyDays, {
         symbolIndex,
         skipStagger: options.skipChartStagger,
+        skipChartCache: options.skipChartCache,
       });
       hourly = chartResult.bars;
       dataSource = chartResult.source;

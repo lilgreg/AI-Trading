@@ -30,6 +30,7 @@ import { stripDisplayTicker, resolveTradingViewSymbol } from "./stocks";
 import { buildSymbolUniverse } from "./symbols";
 import type { ParsedSymbol, StockScanResult } from "./types";
 import { EMPTY_CROSSOVER, NONE_PATTERNS } from "./types";
+import { invalidateYahooChartCache } from "./yahoo-cache";
 
 export interface ScanJobConfig {
   includeBlueChips: boolean;
@@ -708,9 +709,15 @@ export async function scanAndMergeSymbol(
   const parsed = symbols[index];
   const snapshot = await loadSnapshot();
   const prior = snapshot?.results?.find((row) => row.symbol === yahooSymbol);
+  const needsCross4hHeal = prior ? rowNeedsCross4hRescan(prior) : false;
+
+  if (needsCross4hHeal) {
+    await invalidateYahooChartCache(parsed.yahoo, config.historyDays);
+  }
 
   const scanned = await scanSymbol(parsed, config.historyDays, false, index, {
     skipChartStagger: true,
+    skipChartCache: needsCross4hHeal,
   });
   const result = mergeScanResultPreservingQuotes(scanned, prior);
   const merged = sanitizeScanResult({ ...result, universeIndex: index });

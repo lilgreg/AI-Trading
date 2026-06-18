@@ -35,6 +35,8 @@ export interface FetchHourlyBarsOptions {
   symbolIndex?: number;
   /** Skip per-index delay (heal/rescan paths). */
   skipStagger?: boolean;
+  /** Bypass Yahoo R2 chart cache (cross4h heal / symbol rescan). */
+  skipChartCache?: boolean;
 }
 
 /** Symbols at/after this index use staggered Yahoo-only chart fetch (burst throttling). */
@@ -48,7 +50,11 @@ const TAIL_STAGGER_MS = Number(process.env.CHART_TAIL_STAGGER_MS ?? 1_500);
 type ChartProvider = {
   name: string;
   enabled?: () => boolean;
-  fetch: (symbol: string, days: number) => Promise<OhlcBar[]>;
+  fetch: (
+    symbol: string,
+    days: number,
+    options?: FetchHourlyBarsOptions,
+  ) => Promise<OhlcBar[]>;
 };
 
 function skipYahooProviders(): boolean {
@@ -62,23 +68,29 @@ function yahooProviders(): ChartProvider[] {
   return [
     {
       name: "yahoo-v8",
-      fetch: (symbol, days) =>
+      fetch: (symbol, days, options) =>
         yahooLimiter.run(() =>
-          fetchYahooChartV8Direct(symbol, days, YAHOO_CHART_TIMEOUT_MS),
+          fetchYahooChartV8Direct(symbol, days, YAHOO_CHART_TIMEOUT_MS, {
+            skipCache: options?.skipChartCache,
+          }),
         ),
     },
     {
       name: "yahoo-spark",
-      fetch: (symbol, days) =>
+      fetch: (symbol, days, options) =>
         yahooLimiter.run(() =>
-          fetchYahooSparkHourlyBars(symbol, days, YAHOO_CHART_TIMEOUT_MS),
+          fetchYahooSparkHourlyBars(symbol, days, YAHOO_CHART_TIMEOUT_MS, {
+            skipCache: options?.skipChartCache,
+          }),
         ),
     },
     {
       name: "yahoo-v8-range",
-      fetch: (symbol, days) =>
+      fetch: (symbol, days, options) =>
         yahooLimiter.run(() =>
-          fetchYahooChartV8Range(symbol, days, YAHOO_CHART_TIMEOUT_MS),
+          fetchYahooChartV8Range(symbol, days, YAHOO_CHART_TIMEOUT_MS, {
+            skipCache: options?.skipChartCache,
+          }),
         ),
     },
   ];
@@ -163,8 +175,10 @@ export async function fetchHourlyBars(
   options: FetchHourlyBarsOptions = {},
 ): Promise<HourlyBarsResult> {
   const chartSymbol = resolveYahooChartSymbol(symbol);
-  const cached = getCachedHourlyBars(chartSymbol, days);
-  if (cached) return cached;
+  if (!options.skipChartCache) {
+    const cached = getCachedHourlyBars(chartSymbol, days);
+    if (cached) return cached;
+  }
 
   await applyTailStagger(options);
 
@@ -176,7 +190,7 @@ export async function fetchHourlyBars(
 
     tried.push(provider.name);
     try {
-      const bars = await provider.fetch(chartSymbol, days);
+      const bars = await provider.fetch(chartSymbol, days, options);
       if (bars.length === 0) {
         errors.push(`${provider.name}: returned no bars`);
         continue;

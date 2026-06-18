@@ -112,6 +112,44 @@ export function findMostRecentBullishCrossover(
 }
 
 /**
+ * When EMA20 is currently below EMA50, find the start of the most recent historical
+ * stretch where fast was above slow (discrete cross preferred, else period start).
+ */
+export function findLastAbovePeriodStart(
+  bars: OhlcBar[],
+  fastPeriod: number,
+  slowPeriod: number,
+): CrossoverInfo | null {
+  const closes = bars.map((b) => b.close);
+  const emaFast = calculateEma(closes, fastPeriod);
+  const emaSlow = calculateEma(closes, slowPeriod);
+
+  for (let i = bars.length - 1; i >= slowPeriod; i -= 1) {
+    const fast = emaFast[i];
+    const slow = emaSlow[i];
+    if (Number.isNaN(fast) || Number.isNaN(slow) || fast <= slow) continue;
+
+    let periodStart = i;
+    for (let j = i - 1; j >= slowPeriod; j -= 1) {
+      const prevFast = emaFast[j];
+      const prevSlow = emaSlow[j];
+      if (Number.isNaN(prevFast) || Number.isNaN(prevSlow) || prevFast <= prevSlow) break;
+      periodStart = j;
+    }
+
+    for (let j = periodStart; j <= i && j >= 1; j += 1) {
+      if (isBullishCross(emaFast, emaSlow, j)) {
+        return crossoverAtBar(bars, j);
+      }
+    }
+
+    return crossoverAtBar(bars, periodStart);
+  }
+
+  return null;
+}
+
+/**
  * When EMA20 has stayed above EMA50 for the entire lookback (no discrete cross bar),
  * return the first bar in the window where fast > slow.
  */
@@ -146,7 +184,7 @@ export function resolveBullishCrossover(
     findMostRecentBullishCrossover(bars, fastPeriod, slowPeriod) ??
     (fastAboveSlow
       ? findEarliestBullishAbove(bars, fastPeriod, slowPeriod)
-      : null)
+      : findLastAbovePeriodStart(bars, fastPeriod, slowPeriod))
   );
 }
 

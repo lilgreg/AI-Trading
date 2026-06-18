@@ -183,10 +183,13 @@ export async function fetchYahooChartV8Direct(
   symbol: string,
   days: number,
   timeoutMs = YAHOO_TIMEOUT_MS,
+  options: { skipCache?: boolean } = {},
 ): Promise<OhlcBar[]> {
   const cacheId = `${symbol.toUpperCase()}:${days}`;
-  const cached = await getYahooCached<SerializedBar[]>("chart-v8", cacheId);
-  if (cached) return deserializeBars(cached);
+  if (!options.skipCache) {
+    const cached = await getYahooCached<SerializedBar[]>("chart-v8", cacheId);
+    if (cached) return deserializeBars(cached);
+  }
   const bars = await fetchYahooChartV8DirectUncached(symbol, days, timeoutMs);
   await setYahooCached("chart-v8", cacheId, serializeBars(bars));
   return bars;
@@ -231,10 +234,13 @@ export async function fetchYahooChartV8Range(
   symbol: string,
   days: number,
   timeoutMs = YAHOO_TIMEOUT_MS,
+  options: { skipCache?: boolean } = {},
 ): Promise<OhlcBar[]> {
   const cacheId = `${symbol.toUpperCase()}:${days}`;
-  const cached = await getYahooCached<SerializedBar[]>("chart-v8-range", cacheId);
-  if (cached) return deserializeBars(cached);
+  if (!options.skipCache) {
+    const cached = await getYahooCached<SerializedBar[]>("chart-v8-range", cacheId);
+    if (cached) return deserializeBars(cached);
+  }
   const bars = await fetchYahooChartV8RangeUncached(symbol, days, timeoutMs);
   await setYahooCached("chart-v8-range", cacheId, serializeBars(bars));
   return bars;
@@ -331,10 +337,13 @@ export async function fetchYahooSparkHourlyBars(
   symbol: string,
   days: number,
   timeoutMs = YAHOO_TIMEOUT_MS,
+  options: { skipCache?: boolean } = {},
 ): Promise<OhlcBar[]> {
   const cacheId = `${symbol.toUpperCase()}:${days}`;
-  const cached = await getYahooCached<SerializedBar[]>("chart-spark", cacheId);
-  if (cached) return deserializeBars(cached);
+  if (!options.skipCache) {
+    const cached = await getYahooCached<SerializedBar[]>("chart-spark", cacheId);
+    if (cached) return deserializeBars(cached);
+  }
   const bars = await fetchYahooSparkHourlyBarsUncached(symbol, days, timeoutMs);
   await setYahooCached("chart-spark", cacheId, serializeBars(bars));
   return bars;

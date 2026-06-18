@@ -90,6 +90,29 @@ export async function setYahooCached<T>(
   }
 }
 
+export async function deleteYahooCached(
+  kind: YahooCacheKind,
+  id: string,
+): Promise<void> {
+  memory.delete(storageKey(kind, id));
+}
+
+/** Bust in-memory chart cache; fetch with skipCache bypasses R2 reads. */
+export async function invalidateYahooChartCache(
+  symbol: string,
+  days: number,
+): Promise<void> {
+  const cacheId = `${symbol.toUpperCase()}:${days}`;
+  const kinds: YahooCacheKind[] = [
+    "chart-v8",
+    "chart-spark",
+    "chart-v8-range",
+  ];
+  for (const kind of kinds) {
+    await deleteYahooCached(kind, cacheId);
+  }
+}
+
 /** Read-through cache: memory → R2 → fetchFn, then persist. */
 export async function withYahooCache<T>(
   kind: YahooCacheKind,
