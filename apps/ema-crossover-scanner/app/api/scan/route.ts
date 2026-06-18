@@ -44,12 +44,15 @@ const SCAN_READ_CACHE_MAX_AGE_SEC = 45;
 
 async function enrichScanResponseQuotes(
   snapshot: ScanSnapshot | null,
-  options: { persist?: boolean } = {},
+  options: { persist?: boolean; maxBatches?: number } = {},
 ): Promise<ScanSnapshot | null> {
   if (!snapshot?.results?.length) return snapshot;
 
   let current = snapshot;
-  const maxBatches = Math.ceil(current.results.length / WORKERS_QUOTE_ENRICH_LIMIT) + 1;
+  const batchSize = WORKERS_QUOTE_ENRICH_LIMIT;
+  const maxBatches =
+    options.maxBatches ??
+    Math.min(Math.ceil(current.results.length / batchSize) + 1, 2);
 
   for (let batch = 0; batch < maxBatches; batch += 1) {
     const existingBySymbol = new Map(
@@ -371,6 +374,10 @@ export async function GET(request: NextRequest) {
       try {
         responseSnapshot = await enrichScanResponseQuotes(responseSnapshot, {
           persist: true,
+          maxBatches:
+            Math.ceil(
+              (responseSnapshot?.results.length ?? 0) / WORKERS_QUOTE_ENRICH_LIMIT,
+            ) + 1,
         });
       } catch {
         // best-effort quote enrich for table display

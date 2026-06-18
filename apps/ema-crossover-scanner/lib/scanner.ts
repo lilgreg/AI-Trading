@@ -146,7 +146,7 @@ export async function scanSymbol(
   historyDays: number,
   includePatternDebug = false,
   symbolIndex?: number,
-  options: { skipChartStagger?: boolean; skipChartCache?: boolean } = {},
+  options: { skipChartStagger?: boolean; skipChartCache?: boolean; refreshSession?: boolean } = {},
 ): Promise<StockScanResult> {
   const tvSymbol = resolveTradingViewSymbol(parsed);
   const displayTicker = stripDisplayTicker(tvSymbol);
@@ -176,7 +176,9 @@ export async function scanSymbol(
   };
 
   try {
-    const meta = await fetchQuoteMeta(chartSymbol, { refreshSession: true });
+    const meta = await fetchQuoteMeta(chartSymbol, {
+      refreshSession: options.refreshSession === true,
+    });
     const sessionResolved = await resolveSessionChanges(
       {
         symbol: parsed.yahoo,

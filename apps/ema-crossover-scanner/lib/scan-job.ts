@@ -12,7 +12,7 @@ import {
 } from "./chart-error-sanitize";
 import { isCloudflareWorkersRuntime } from "./runtime";
 import { sleep } from "./request-limit";
-import { mergeScanResultsPreservingQuotes } from "./quote-updates";
+import { mergeScanResultsPreservingQuotes, isStaleSessionSnapshot } from "./quote-updates";
 import {
   buildCacheStatus,
   getStaleAfterMs,
@@ -719,6 +719,7 @@ export async function scanAndMergeSymbol(
   const scanned = await scanSymbol(parsed, config.historyDays, false, index, {
     skipChartStagger: true,
     skipChartCache: true,
+    refreshSession: isStaleSessionSnapshot(prior?.sessionSnapshotDate),
   });
   const result = mergeScanResultPreservingQuotes(scanned, prior);
   const merged = sanitizeScanResult({ ...result, universeIndex: index });
