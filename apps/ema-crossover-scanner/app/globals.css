@@ -27,33 +27,38 @@ body {
 }
 
 .badge-green {
-  background: color-mix(in srgb, var(--green) 18%, transparent);
-  color: var(--green);
-  border: 1px solid color-mix(in srgb, var(--green) 35%, transparent);
+  background: color-mix(in srgb, var(--green) 14%, white);
+  color: #047857;
+  border: 1px solid color-mix(in srgb, var(--green) 40%, transparent);
+  font-weight: 600;
 }
 
 .badge-red {
-  background: color-mix(in srgb, var(--red) 18%, transparent);
-  color: var(--red);
-  border: 1px solid color-mix(in srgb, var(--red) 35%, transparent);
+  background: color-mix(in srgb, var(--red) 14%, white);
+  color: #c62828;
+  border: 1px solid color-mix(in srgb, var(--red) 40%, transparent);
+  font-weight: 600;
 }
 
 .badge-amber {
-  background: color-mix(in srgb, var(--amber) 18%, transparent);
-  color: var(--amber);
-  border: 1px solid color-mix(in srgb, var(--amber) 35%, transparent);
+  background: color-mix(in srgb, var(--amber) 14%, white);
+  color: #b45309;
+  border: 1px solid color-mix(in srgb, var(--amber) 45%, transparent);
+  font-weight: 600;
 }
 
 .badge-muted {
-  background: color-mix(in srgb, var(--muted) 12%, transparent);
-  color: var(--muted);
+  background: color-mix(in srgb, var(--muted) 10%, white);
+  color: #5c5f6b;
   border: 1px solid var(--border);
+  font-weight: 500;
 }
 
 .badge-blue {
-  background: color-mix(in srgb, var(--accent) 18%, transparent);
-  color: var(--accent);
-  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  background: color-mix(in srgb, var(--accent) 14%, white);
+  color: #1e4fd6;
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  font-weight: 600;
 }
 
 .btn {
