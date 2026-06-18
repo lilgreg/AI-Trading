@@ -27,7 +27,7 @@ import {
   noteWorkerRateLimit,
 } from "@/lib/client-poll";
 import { createPollCoordinator } from "@/lib/poll-coordinator";
-import { getPollIntervals } from "@/lib/poll-intervals";
+import { getPollIntervals, newsPollLabelSec as formatNewsPollLabelSec } from "@/lib/poll-intervals";
 import type {
   CachedScanResponse,
   CrossoverDisplay,
@@ -35,7 +35,7 @@ import type {
   StockScanResult,
 } from "@/lib/types";
 
-type SortKey = "session" | "patterns" | "cross1h" | "cross4h";
+type SortKey = "symbol" | "session" | "patterns" | "cross1h" | "cross4h";
 type SortDir = "asc" | "desc";
 
 function formatPrice(value: number | null): string {
@@ -381,8 +381,14 @@ function ScanTableHeaderRow({
   return (
     <tr>
       <th scope="col">#</th>
-      <th scope="col" colSpan={2}>
-        Symbol
+      <th
+        scope="col"
+        colSpan={2}
+        className="sortable"
+        onClick={() => onSort("symbol")}
+        aria-sort={ariaSortValue("symbol", sortKey, sortDir)}
+      >
+        Symbol{sortIndicator(sortKey === "symbol", sortDir)}
       </th>
       <th scope="col">Name</th>
       <th scope="col">Price</th>
@@ -445,9 +451,7 @@ export default function HomePage() {
   const [newsHeadlines, setNewsHeadlines] = useState<NewsHeadline[]>([]);
   const [newsSymbolCount, setNewsSymbolCount] = useState(0);
   const [newsLoading, setNewsLoading] = useState(false);
-  const [newsPollLabelSec, setNewsPollLabelSec] = useState(() =>
-    Math.round(getPollIntervals().newsMs / 1000),
-  );
+  const [newsPollLabelSec, setNewsPollLabelSec] = useState(() => formatNewsPollLabelSec());
   const [glowingNewsIds, setGlowingNewsIds] = useState<Set<string>>(() => new Set());
   const [selectedNewsArticle, setSelectedNewsArticle] = useState<NewsHeadline | null>(
     null,
@@ -458,6 +462,7 @@ export default function HomePage() {
   const chartErrorRetryInFlightRef = useRef(false);
   const pageVisibleRef = useRef(true);
   const quoteChunkOffsetRef = useRef(0);
+  const newsHeadlinesRef = useRef<NewsHeadline[]>([]);
   const seenNewsIdsRef = useRef<Set<string>>(new Set());
   const newsBarRef = useRef<HTMLElement | null>(null);
 
@@ -523,7 +528,7 @@ export default function HomePage() {
         const rateMsg = formatRateLimitError();
         setRateLimitMsg(rateMsg);
         if (!options?.quiet) setError(rateMsg);
-      } else {
+      } else if (!options?.quiet) {
         setError(msg);
       }
     } finally {
@@ -663,7 +668,9 @@ export default function HomePage() {
 
   const pollNews = useCallback(async (options?: { quiet?: boolean }) => {
     if (!pageVisibleRef.current || isWorkerRateLimited()) {
-      setNewsError(formatRateLimitError());
+      if (newsHeadlinesRef.current.length === 0) {
+        setNewsError(formatRateLimitError());
+      }
       return;
     }
     if (!options?.quiet) setNewsLoading(true);
@@ -674,20 +681,24 @@ export default function HomePage() {
         error?: string;
       }>("/api/news");
 
+      const prevHeadlines = newsHeadlinesRef.current;
+
       if (rateLimited || status === 429) {
-        setNewsError(formatRateLimitError());
+        if (prevHeadlines.length === 0) {
+          setNewsError(formatRateLimitError());
+        }
         return;
       }
 
       if (!ok) {
-        if (newsHeadlines.length === 0) {
+        if (prevHeadlines.length === 0) {
           setNewsError(body.error ?? `News failed (${status})`);
         }
         return;
       }
 
       if (body.error && !(body.headlines?.length)) {
-        if (newsHeadlines.length === 0) {
+        if (prevHeadlines.length === 0) {
           setNewsError(body.error);
         }
         return;
@@ -695,6 +706,10 @@ export default function HomePage() {
 
       setNewsError(null);
       const incoming = body.headlines ?? [];
+      if (incoming.length === 0 && prevHeadlines.length > 0) {
+        return;
+      }
+
       const freshIds = incoming
         .map(newsHeadlineId)
         .filter((id) => !seenNewsIdsRef.current.has(id));
@@ -709,9 +724,10 @@ export default function HomePage() {
       }
 
       setNewsHeadlines(incoming);
+      newsHeadlinesRef.current = incoming;
       setNewsSymbolCount(body.symbolCount ?? 0);
     } catch (err) {
-      if (newsHeadlines.length === 0) {
+      if (newsHeadlinesRef.current.length === 0) {
         const msg = err instanceof Error ? err.message : "Failed to fetch news";
         setNewsError(
           isWorkerRateLimited() || msg.toLowerCase().includes("failed to fetch")
@@ -722,7 +738,7 @@ export default function HomePage() {
     } finally {
       if (!options?.quiet) setNewsLoading(false);
     }
-  }, [newsHeadlines.length]);
+  }, []);
 
   const applyQuotePayload = useCallback(
     (
@@ -860,6 +876,10 @@ export default function HomePage() {
   }, [data?.results]);
 
   useEffect(() => {
+    newsHeadlinesRef.current = newsHeadlines;
+  }, [newsHeadlines]);
+
+  useEffect(() => {
     hydrateRateLimitFromStorage();
     if (isWorkerRateLimited()) {
       setRateLimitMsg(formatRateLimitError());
@@ -880,7 +900,7 @@ export default function HomePage() {
 
   useEffect(() => {
     const syncPollLabel = () => {
-      setNewsPollLabelSec(Math.round(getPollIntervals().newsMs / 1000));
+      setNewsPollLabelSec(formatNewsPollLabelSec());
     };
     syncPollLabel();
     const id = setInterval(syncPollLabel, 60_000);
@@ -1098,7 +1118,9 @@ export default function HomePage() {
     } else {
       setSortKey(key);
       setSortDir(
-        key === "patterns" || key.startsWith("cross") ? "asc" : "desc",
+        key === "patterns" || key.startsWith("cross") || key === "symbol"
+          ? "asc"
+          : "desc",
       );
     }
   };
@@ -1125,6 +1147,10 @@ export default function HomePage() {
         else if (aVal == null) cmp = 1;
         else if (bVal == null) cmp = -1;
         else cmp = aVal - bVal;
+      } else if (sortKey === "symbol") {
+        cmp = a.displayTicker.localeCompare(b.displayTicker, undefined, {
+          sensitivity: "base",
+        });
       } else if (sortKey === "patterns") {
         cmp = rowPatternSortKey(a.patterns) - rowPatternSortKey(b.patterns);
       } else if (sortKey === "cross1h") {
@@ -1320,14 +1346,14 @@ export default function HomePage() {
       <section ref={newsBarRef} className="sticky-news-bar card mb-4 p-4">
         <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
           <h2 className="text-sm font-medium text-[var(--text)]">
-            News · Recent EMA crosses (1h/4h)
+            News · EMA crosses &amp; Fed/macro
           </h2>
           <span className="text-xs text-[var(--muted)]">
             {newsError
               ? newsError
               : newsLoading && newsHeadlines.length === 0
               ? "Loading headlines…"
-              : newsSymbolCount > 0
+              : newsHeadlines.length > 0
                 ? `${newsSymbolCount} crossed symbols · ${newsHeadlines.length} headlines · refreshes every ~${newsPollLabelSec}s`
                 : "No qualifying crosses yet"}
           </span>

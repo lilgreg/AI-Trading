@@ -135,6 +135,21 @@ export function findEarliestBullishAbove(
   return null;
 }
 
+/** Most recent bullish cross, or earliest bar above when still above with no discrete cross. */
+export function resolveBullishCrossover(
+  bars: OhlcBar[],
+  fastPeriod: number,
+  slowPeriod: number,
+  fastAboveSlow: boolean,
+): CrossoverInfo | null {
+  return (
+    findMostRecentBullishCrossover(bars, fastPeriod, slowPeriod) ??
+    (fastAboveSlow
+      ? findEarliestBullishAbove(bars, fastPeriod, slowPeriod)
+      : null)
+  );
+}
+
 function crossoverAtBar(bars: OhlcBar[], index: number): CrossoverInfo {
   const ref = bars[bars.length - 1]?.date ?? new Date();
   return {

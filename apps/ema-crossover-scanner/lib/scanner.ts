@@ -1,8 +1,7 @@
 import {
-  findEarliestBullishAbove,
-  findMostRecentBullishCrossover,
   formatCrossoverDateTime,
   latestEmaValues,
+  resolveBullishCrossover,
   type CrossoverInfo,
 } from "./ema";
 import { isCloudflareWorkersRuntime } from "./runtime";
@@ -206,15 +205,18 @@ export async function scanSymbol(
       SLOW_EMA,
     );
 
-    const cross1h = buildCrossoverDisplay(
-      findMostRecentBullishCrossover(hourly, FAST_EMA, SLOW_EMA),
+    const closes1h = hourly.map((b) => b.close);
+    const { fastAboveSlow: fastAboveSlow1h } = latestEmaValues(
+      closes1h,
+      FAST_EMA,
+      SLOW_EMA,
     );
-    const cross4hRaw =
-      findMostRecentBullishCrossover(bars4h, FAST_EMA, SLOW_EMA) ??
-      (fastAboveSlow
-        ? findEarliestBullishAbove(bars4h, FAST_EMA, SLOW_EMA)
-        : null);
-    const cross4h = buildCrossoverDisplay(cross4hRaw);
+    const cross1h = buildCrossoverDisplay(
+      resolveBullishCrossover(hourly, FAST_EMA, SLOW_EMA, fastAboveSlow1h),
+    );
+    const cross4h = buildCrossoverDisplay(
+      resolveBullishCrossover(bars4h, FAST_EMA, SLOW_EMA, fastAboveSlow),
+    );
 
     const patterns = evaluateAllPatterns(hourly, bars4h, quoteFields.price, includePatternDebug);
 

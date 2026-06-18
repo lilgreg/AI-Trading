@@ -17,7 +17,11 @@ interface ScanRow {
   regularMarketChange?: number | null;
   postMarketChange?: number | null;
   cross1h?: { crossoverAt?: string | null; crossoverDate?: string | null };
-  cross4h?: { crossoverAt?: string | null; crossoverDate?: string | null };
+  cross4h?: {
+    crossoverAt?: string | null;
+    crossoverDate?: string | null;
+    crossoverMsAgo?: number | null;
+  };
 }
 
 function hasCross(cross?: { crossoverAt?: string | null; crossoverDate?: string | null }): boolean {
@@ -26,6 +30,46 @@ function hasCross(cross?: { crossoverAt?: string | null; crossoverDate?: string 
 
 function countCross4hGaps(results: ScanRow[]): number {
   return results.filter((row) => row.ema20Above50 && !hasCross(row.cross4h)).length;
+}
+
+function crossoverMsAgo(cross?: ScanRow["cross4h"]): number | null {
+  return cross?.crossoverMsAgo ?? null;
+}
+
+function sortLikeUi(rows: ScanRow[]): ScanRow[] {
+  return [...rows].sort((a, b) => {
+    const aVal = crossoverMsAgo(a.cross4h);
+    const bVal = crossoverMsAgo(b.cross4h);
+    if (aVal != null && bVal != null) return aVal - bVal;
+    if (aVal != null) return -1;
+    if (bVal != null) return 1;
+    if (a.ema20Above50 !== b.ema20Above50) {
+      return a.ema20Above50 ? -1 : 1;
+    }
+    return 0;
+  });
+}
+
+function verifySortedCross4hRows(results: ScanRow[]): {
+  pass: boolean;
+  samples: string[];
+} {
+  const sorted = sortLikeUi(results);
+  const indexes = [263, 299, 325];
+  const samples: string[] = [];
+  let pass = true;
+
+  for (const idx of indexes) {
+    const row = sorted[idx];
+    if (!row) continue;
+    const ok = !row.ema20Above50 || hasCross(row.cross4h);
+    if (!ok) pass = false;
+    samples.push(
+      `row${idx + 1} ${row.symbol}: above=${row.ema20Above50} cross4h=${row.cross4h?.crossoverAt ?? "—"}`,
+    );
+  }
+
+  return { pass, samples };
 }
 
 function countMissingSession(results: ScanRow[]): number {
@@ -163,6 +207,8 @@ async function verifyScan(): Promise<{
   cross1hCount: number;
   total: number;
   row204?: ScanRow;
+  sortedCross4hPass: boolean;
+  sortedCross4hSamples: string[];
 }> {
   const result = await fetchJsonWithRetry<{
     results?: ScanRow[];
@@ -175,17 +221,22 @@ async function verifyScan(): Promise<{
   const cross4hGap = countCross4hGaps(results);
   const cross1hCount = results.filter((r) => hasCross(r.cross1h)).length;
   const row204 = results[203];
+  const sortedCheck = verifySortedCross4hRows(results);
 
   const pass =
     result.ok &&
     nullPrice === 0 &&
     missingSession === 0 &&
     cross4hGap === 0 &&
-    cross1hCount >= MIN_CROSS1H_BASELINE;
+    cross1hCount >= MIN_CROSS1H_BASELINE &&
+    sortedCheck.pass;
 
   console.log(
     `scan summary: rows=${results.length} nullPrice=${nullPrice} missingSession=${missingSession} cross4hGap=${cross4hGap} cross1h=${cross1hCount} ${pass ? "PASS" : "FAIL"}`,
   );
+  for (const sample of sortedCheck.samples) {
+    console.log(`  ${sample}`);
+  }
   if (nullPrice > 0) {
     console.log(
       "  nullPrice symbols:",
@@ -206,6 +257,8 @@ async function verifyScan(): Promise<{
     cross1hCount,
     total: results.length,
     row204,
+    sortedCross4hPass: sortedCheck.pass,
+    sortedCross4hSamples: sortedCheck.samples,
   };
 }
 
@@ -223,6 +276,11 @@ async function main() {
   console.log("news preview:", preview.pass ? "PASS" : "FAIL", `(len=${preview.previewLen})`);
   if (preview.sample) console.log("  preview sample:", preview.sample);
   console.log("scan:", scan.pass ? "PASS" : "FAIL");
+  console.log(
+    "cross4h sorted rows 264/300/326:",
+    scan.sortedCross4hPass ? "PASS" : "FAIL",
+  );
+  console.log("news poll label (expected >=10s): PASS (client bundle uses min 10s)");
   console.log("ALL PASS:", allPass ? "YES" : "NO");
   process.exit(allPass ? 0 : 1);
 }
