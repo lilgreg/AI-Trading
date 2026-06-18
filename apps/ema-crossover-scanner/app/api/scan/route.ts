@@ -294,7 +294,7 @@ export async function GET(request: NextRequest) {
   const isWorkers = isCloudflareWorkersRuntime();
 
   if (statusOnly && isWorkers) {
-    scheduleBackgroundTask(() => recoverStuckScanState(null));
+    await recoverStuckScanState(null);
     const statusPayload = await buildStatusFromMeta(await loadScanMeta());
     return NextResponse.json(statusPayload, {
       headers: { "Cache-Control": "no-store" },
@@ -302,7 +302,7 @@ export async function GET(request: NextRequest) {
   }
 
   if (force && isWorkers) {
-    scheduleBackgroundTask(() => recoverStuckScanState(null));
+    await recoverStuckScanState(null);
     const meta = await loadScanMeta();
     const statusPayload = await buildStatusFromMeta(meta);
     const snapshotStub = meta

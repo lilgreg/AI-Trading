@@ -6,23 +6,73 @@ import { LOCK_KEY, META_KEY } from "./scan-storage";
 const SCAN_READ_CACHE_MAX_AGE_SEC = 45;
 const LOCK_TTL_MS = 15 * 60 * 1000;
 const STALE_AFTER_MS = 15 * 60 * 1000;
+/** Mirrors scan-cache EMPTY_CACHE_LOCK_GRACE_MS — release lock on empty cache. */
+const EMPTY_CACHE_LOCK_GRACE_MS = 2 * 60 * 1000;
+/** Mirrors scan-cache ORPHAN_SCAN_LOCK_MS_CF — Workers HTTP ~30s between chunks. */
+const ORPHAN_SCAN_LOCK_MS_CF = 2 * 60 * 1000;
 
-function isLockActive(
-  lock: { expiresAt?: string } | null,
-  now: number,
-): boolean {
+const EXPIRED_LOCK = {
+  startedAt: new Date(0).toISOString(),
+  expiresAt: new Date(0).toISOString(),
+};
+
+type ScanLock = { startedAt?: string; expiresAt?: string };
+
+function isLockActive(lock: ScanLock | null, now: number): boolean {
   if (!lock?.expiresAt) return false;
   const expires = Date.parse(lock.expiresAt);
   return Number.isFinite(expires) && expires > now;
 }
 
+function shouldRecoverOrphanLock(
+  lock: ScanLock | null,
+  now: number,
+  cacheEmpty: boolean,
+): boolean {
+  if (!lock?.expiresAt) return false;
+  if (!isLockActive(lock, now)) return true;
+
+  const startedMs = lock.startedAt ? Date.parse(lock.startedAt) : 0;
+  const lockAge =
+    startedMs > 0 && Number.isFinite(startedMs) ? now - startedMs : LOCK_TTL_MS;
+
+  if (cacheEmpty && lockAge >= EMPTY_CACHE_LOCK_GRACE_MS) return true;
+  if (lockAge >= ORPHAN_SCAN_LOCK_MS_CF) return true;
+  return false;
+}
+
+async function releaseScanLockR2(bucket: R2Bucket): Promise<void> {
+  await bucket.put(LOCK_KEY, JSON.stringify(EXPIRED_LOCK), {
+    httpMetadata: { contentType: "application/json" },
+  });
+}
+
+/** Inline recoverStuckScanState for R2 fast-path (no OpenNext / scan-cache import). */
+async function recoverOrphanScanLockR2(
+  bucket: R2Bucket,
+  lock: ScanLock | null,
+  cacheEmpty: boolean,
+): Promise<ScanLock | null> {
+  if (!shouldRecoverOrphanLock(lock, Date.now(), cacheEmpty)) return lock;
+  await releaseScanLockR2(bucket);
+  return null;
+}
+
+async function readLockAndRecover(
+  bucket: R2Bucket,
+  cacheEmpty: boolean,
+): Promise<ScanLock | null> {
+  const lockObj = await bucket.get(LOCK_KEY);
+  const lock = lockObj
+    ? ((await lockObj.json()) as ScanLock)
+    : null;
+  return recoverOrphanScanLockR2(bucket, lock, cacheEmpty);
+}
+
 async function buildStatusPayload(
   bucket: R2Bucket,
 ): Promise<Record<string, unknown>> {
-  const [metaObj, lockObj] = await Promise.all([
-    bucket.get(META_KEY),
-    bucket.get(LOCK_KEY),
-  ]);
+  const metaObj = await bucket.get(META_KEY);
 
   const meta = metaObj
     ? ((await metaObj.json()) as {
@@ -31,13 +81,12 @@ async function buildStatusPayload(
         symbolCount?: number;
       })
     : null;
-  const lock = lockObj
-    ? ((await lockObj.json()) as { startedAt?: string; expiresAt?: string })
-    : null;
 
   const now = Date.now();
-  const scanInProgress = isLockActive(lock, now);
   const scannedAt = meta?.scannedAt ?? null;
+  const cacheEmpty = scannedAt == null;
+  const lock = await readLockAndRecover(bucket, cacheEmpty);
+  const scanInProgress = isLockActive(lock, now);
   const stale =
     scannedAt == null ||
     now - Date.parse(scannedAt) > STALE_AFTER_MS;
@@ -48,7 +97,7 @@ async function buildStatusPayload(
     symbolCount: meta?.symbolCount ?? 0,
     stale,
     scanInProgress,
-    cacheEmpty: scannedAt == null,
+    cacheEmpty,
     staleAfterMinutes: STALE_AFTER_MS / 60_000,
     lastError: null,
     scanStartedAt: scanInProgress ? (lock?.startedAt ?? null) : null,
@@ -92,10 +141,19 @@ async function tryServeScanApi(
     url.searchParams.get("heal") === "1" ||
     url.searchParams.get("heal") === "true";
   const force = url.searchParams.get("force") === "true";
-  if (heal || force) return null;
+  if (heal) return null;
 
   const bucket = env.SCAN_CACHE_R2_BUCKET;
   if (!bucket) return null;
+
+  if (force) {
+    const metaObj = await bucket.get(META_KEY);
+    const meta = metaObj
+      ? ((await metaObj.json()) as { scannedAt?: string })
+      : null;
+    await readLockAndRecover(bucket, meta?.scannedAt == null);
+    return null;
+  }
 
   const statusOnly = url.searchParams.get("status") === "true";
   if (statusOnly) {
