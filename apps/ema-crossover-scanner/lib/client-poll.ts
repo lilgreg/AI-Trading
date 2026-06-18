@@ -4,9 +4,11 @@ const RATE_LIMIT_STATUSES = new Set([429, 502, 503]);
 const LS_RATE_LIMIT_KEY = "ema-scanner:worker-rate-limit-until";
 
 let backoffUntilMs = 0;
-let currentBackoffMs = 30_000;
-const MIN_BACKOFF_MS = 30_000;
-const MAX_BACKOFF_MS = 300_000;
+let currentBackoffMs = 10_000;
+const MIN_BACKOFF_MS = 10_000;
+const MAX_BACKOFF_MS = 90_000;
+/** True only after a 429/503 — not restored from localStorage on hydrate. */
+let rateLimitBlocking = false;
 
 function persistRateLimitUntil(): void {
   if (typeof window === "undefined") return;
@@ -33,6 +35,7 @@ export function hydrateRateLimitFromStorage(): void {
       return;
     }
     backoffUntilMs = until;
+    // Do not set rateLimitBlocking — allow an immediate fetch to clear stale storage.
   } catch {
     // ignore
   }
@@ -49,7 +52,16 @@ function bodyLooksRateLimited(bodyText: string): boolean {
 }
 
 export function isWorkerRateLimited(): boolean {
-  return Date.now() < backoffUntilMs;
+  if (Date.now() >= backoffUntilMs) {
+    rateLimitBlocking = false;
+    return false;
+  }
+  return rateLimitBlocking;
+}
+
+/** Show banner only when a request was actually blocked this session. */
+export function shouldShowRateLimitBanner(): boolean {
+  return rateLimitBlocking && Date.now() < backoffUntilMs;
 }
 
 export function noteWorkerRateLimit(status?: number, bodyText?: string): void {
@@ -58,6 +70,7 @@ export function noteWorkerRateLimit(status?: number, bodyText?: string): void {
     (bodyText != null && bodyLooksRateLimited(bodyText));
   if (!limited) return;
 
+  rateLimitBlocking = true;
   backoffUntilMs = Date.now() + currentBackoffMs;
   currentBackoffMs = Math.min(currentBackoffMs * 2, MAX_BACKOFF_MS);
   persistRateLimitUntil();
@@ -66,6 +79,7 @@ export function noteWorkerRateLimit(status?: number, bodyText?: string): void {
 export function noteWorkerSuccess(): void {
   currentBackoffMs = MIN_BACKOFF_MS;
   backoffUntilMs = 0;
+  rateLimitBlocking = false;
   persistRateLimitUntil();
 }
 

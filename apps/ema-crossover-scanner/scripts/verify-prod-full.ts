@@ -6,7 +6,7 @@ const SCAN_ATTEMPTS = 3;
 const NEWS_ATTEMPTS = 3;
 const RETRY_PAUSE_MS = 8_000;
 const MIN_CROSS1H_BASELINE = 300;
-const MIN_PREVIEW_LEN = 200;
+const MIN_PREVIEW_LEN = 500;
 
 interface ScanRow {
   symbol?: string;
@@ -182,14 +182,17 @@ async function verifyNewsPreview(): Promise<{ pass: boolean; previewLen: number;
       if (i < 2) await sleep(RETRY_PAUSE_MS);
       continue;
     }
-    const body = JSON.parse(text) as { summary?: string | null };
-    const summary = body.summary?.trim() ?? "";
+    const body = JSON.parse(text) as {
+      summary?: string | null;
+      fullText?: string | null;
+    };
+    const summary = body.fullText?.trim() || body.summary?.trim() || "";
     const multiParagraph = summary.includes("\n\n");
     const pass =
       res.status === 200 &&
       (summary.length >= MIN_PREVIEW_LEN || multiParagraph);
     console.log(
-      `news preview try ${i + 1}: ${res.status} ${ms}ms len=${summary.length} ${pass ? "PASS" : "FAIL"}`,
+      `news preview try ${i + 1}: ${res.status} ${ms}ms len=${summary.length} fullText=${body.fullText?.length ?? 0} ${pass ? "PASS" : "FAIL"}`,
     );
     if (pass) {
       return { pass: true, previewLen: summary.length, sample: summary.slice(0, 240) };

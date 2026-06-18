@@ -8,8 +8,8 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 15;
 
 const PREVIEW_TIMEOUT_MS = 10_000;
-const MAX_SUMMARY_LEN = 6_000;
-const MIN_USEFUL_LEN = 200;
+const MAX_SUMMARY_LEN = 50_000;
+const MIN_USEFUL_LEN = 500;
 const PREVIEW_USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
@@ -142,7 +142,25 @@ async function fetchPreviewHtml(url: string): Promise<string | null> {
   return res.text();
 }
 
+function extractYahooCaasParagraphs(html: string): string | null {
+  const caasMatch = html.match(
+    /class=["'][^"']*caas-body[^"']*["'][^>]*>([\s\S]*?)<\/div>/i,
+  );
+  if (!caasMatch) return null;
+
+  const parts: string[] = [];
+  for (const p of caasMatch[1].matchAll(/<p[^>]*>([\s\S]*?)<\/p>/gi)) {
+    const text = stripHtml(decodeHtmlEntities(p[1]));
+    if (text.length > 40) parts.push(text);
+  }
+  const combined = parts.join("\n\n");
+  return combined.length > 80 ? combined : null;
+}
+
 function extractArticleParagraphs(html: string): string | null {
+  const yahooCaas = extractYahooCaasParagraphs(html);
+  if (yahooCaas && yahooCaas.length >= 200) return yahooCaas;
+
   const regionPattern =
     /<(article|main|div)[^>]*(?:class|id)=["'][^"']*(?:article|story|content|post-body|entry-content)[^"']*["'][^>]*>([\s\S]*?)<\/\1>/gi;
 
@@ -207,23 +225,36 @@ function previewCacheId(url: string): string {
   return createHash("sha256").update(url).digest("hex").slice(0, 32);
 }
 
-async function scrapeSummary(url: string): Promise<string | null> {
-  const html = await fetchPreviewHtml(url);
-  if (!html) return null;
-
+function extractMetaSummary(html: string): string | null {
   const metaSummary = longestText(
     extractMetaContent(html, "property", "og:description"),
     extractMetaContent(html, "name", "description"),
     extractMetaContent(html, "name", "twitter:description"),
     extractMetaContent(html, "property", "article:description"),
   );
+  return metaSummary ? decodeHtmlEntities(metaSummary) : null;
+}
 
+/** Priority: article paragraphs > Yahoo __NEXT_DATA__ > JSON-LD > meta description. */
+function extractFullArticleText(html: string): string | null {
   return longestText(
-    metaSummary ? decodeHtmlEntities(metaSummary) : null,
+    extractArticleParagraphs(html),
     extractYahooNextArticleBody(html),
     extractJsonLdText(html),
-    extractArticleParagraphs(html),
   );
+}
+
+async function scrapeSummary(
+  url: string,
+): Promise<{ summary: string | null; fullText: string | null }> {
+  const html = await fetchPreviewHtml(url);
+  if (!html) return { summary: null, fullText: null };
+
+  const fullText = extractFullArticleText(html);
+  const metaSummary = extractMetaSummary(html);
+  const summary = longestText(fullText, metaSummary);
+
+  return { summary, fullText: fullText ?? summary };
 }
 
 export async function GET(request: Request) {
@@ -249,27 +280,32 @@ export async function GET(request: Request) {
   const cacheId = previewCacheId(target.toString());
 
   try {
-    const cached = await getYahooCached<{ summary: string | null }>(
-      "news-preview",
-      cacheId,
-    );
-    if (cached?.summary && cached.summary.length >= MIN_USEFUL_LEN) {
-      return NextResponse.json({ summary: cached.summary });
+    const cached = await getYahooCached<{
+      summary: string | null;
+      fullText?: string | null;
+    }>("news-preview", cacheId);
+    const cachedFull = cached?.fullText?.trim() || cached?.summary?.trim() || "";
+    if (cachedFull.length >= MIN_USEFUL_LEN) {
+      return NextResponse.json({
+        summary: cached?.summary ?? cachedFull,
+        fullText: cached?.fullText ?? cachedFull,
+      });
     }
 
     const scraped = await scrapeSummary(target.toString());
     const fallback = buildFallbackSummary(headline, yahooSummary);
-    const summary = trimSummary(
-      longestText(scraped, fallback) ?? fallback,
+    const fullText = trimSummary(
+      longestText(scraped.fullText, scraped.summary, fallback) ?? fallback,
     );
+    const summary = fullText;
 
-    if (summary && summary.length >= MIN_USEFUL_LEN) {
-      await setYahooCached("news-preview", cacheId, { summary });
+    if (fullText && fullText.length >= MIN_USEFUL_LEN) {
+      await setYahooCached("news-preview", cacheId, { summary, fullText });
     }
 
-    return NextResponse.json({ summary: summary ?? null });
+    return NextResponse.json({ summary: summary ?? null, fullText: fullText ?? null });
   } catch {
     const fallback = trimSummary(buildFallbackSummary(headline, yahooSummary));
-    return NextResponse.json({ summary: fallback });
+    return NextResponse.json({ summary: fallback, fullText: fallback });
   }
 }

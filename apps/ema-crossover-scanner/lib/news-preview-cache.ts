@@ -1,6 +1,6 @@
 const CACHE_TTL_MS = 5 * 60_000;
 /** Ignore cached previews shorter than this — modal always re-fetches for full text. */
-const MIN_USEFUL_PREVIEW_LEN = 120;
+const MIN_USEFUL_PREVIEW_LEN = 500;
 
 interface PreviewEntry {
   summary: string | null;
@@ -27,8 +27,12 @@ async function requestPreview(
     cache: "no-store",
   });
   if (!res.ok) return null;
-  const body = (await res.json()) as { summary?: string | null };
-  const summary = body.summary?.trim() || null;
+  const body = (await res.json()) as {
+    summary?: string | null;
+    fullText?: string | null;
+  };
+  const summary =
+    body.fullText?.trim() || body.summary?.trim() || null;
   cache.set(url, { summary, fetchedAt: Date.now() });
   return summary;
 }

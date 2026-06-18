@@ -1,7 +1,7 @@
 /** Per-isolate burst guard — returns 429 before Cloudflare kills the worker (1027). */
 
 const WINDOW_MS = 60_000;
-const MAX_API_RPM = 40;
+const MAX_API_RPM = 100;
 
 let windowStartMs = 0;
 let requestCount = 0;
@@ -33,14 +33,20 @@ export async function recordGlobalRequest(env: CloudflareEnv): Promise<void> {
 export function guardWorkerRequest(
   requestUrl: string,
 ): { allowed: true } | { allowed: false; retryAfterSec: number } {
-  let path = "/";
+  let url: URL;
   try {
-    path = new URL(requestUrl).pathname;
+    url = new URL(requestUrl);
   } catch {
     return { allowed: true };
   }
 
+  const path = url.pathname;
   if (!path.startsWith("/api/")) {
+    return { allowed: true };
+  }
+
+  // Lightweight status polls should not compete with scan/news burst budget.
+  if (path === "/api/scan" && url.searchParams.get("status") === "true") {
     return { allowed: true };
   }
 

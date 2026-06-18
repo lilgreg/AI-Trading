@@ -25,6 +25,8 @@ import {
   hydrateRateLimitFromStorage,
   isWorkerRateLimited,
   noteWorkerRateLimit,
+  noteWorkerSuccess,
+  shouldShowRateLimitBanner,
 } from "@/lib/client-poll";
 import { createPollCoordinator } from "@/lib/poll-coordinator";
 import { getPollIntervals, newsPollLabelSec as formatNewsPollLabelSec } from "@/lib/poll-intervals";
@@ -443,7 +445,7 @@ export default function HomePage() {
   const [newsError, setNewsError] = useState<string | null>(null);
   const [onlyAbove, setOnlyAbove] = useState(false);
   const [sortKey, setSortKey] = useState<SortKey>("cross4h");
-  const [sortDir, setSortDir] = useState<SortDir>("asc");
+  const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [quotesLive, setQuotesLive] = useState(false);
   const [quoteDailyBySymbol, setQuoteDailyBySymbol] = useState<
     Map<string, number | null>
@@ -521,6 +523,8 @@ export default function HomePage() {
       const json = normalizeCachedResponse(
         (await res.json()) as Partial<CachedScanResponse>,
       );
+      noteWorkerSuccess();
+      setRateLimitMsg(null);
       setData((prev) => applyScanPayload(json, prev));
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Failed to load scan";
@@ -909,7 +913,9 @@ export default function HomePage() {
 
   useEffect(() => {
     const tick = () => {
-      setRateLimitMsg(isWorkerRateLimited() ? formatRateLimitError() : null);
+      setRateLimitMsg(
+        shouldShowRateLimitBanner() ? formatRateLimitError() : null,
+      );
     };
     tick();
     const id = setInterval(tick, 1_000);
@@ -1118,9 +1124,11 @@ export default function HomePage() {
     } else {
       setSortKey(key);
       setSortDir(
-        key === "patterns" || key.startsWith("cross") || key === "symbol"
+        key === "patterns" || key === "symbol"
           ? "asc"
-          : "desc",
+          : key.startsWith("cross")
+            ? "desc"
+            : "desc",
       );
     }
   };
@@ -1251,7 +1259,17 @@ export default function HomePage() {
             </p>
           </div>
 
-          <div className="flex gap-2">
+          <div className="flex flex-col items-end gap-2">
+            <p className="text-xs text-[var(--muted)]">
+              Last scan:{" "}
+              <span className="font-medium text-[var(--text)]">
+                {formatScanDataAge(data?.scannedAt ?? null)}
+              </span>
+              {data?.stale && !data.scanInProgress && (
+                <span className="ml-1 text-[var(--amber)]">(stale)</span>
+              )}
+            </p>
+            <div className="flex gap-2">
             <button
               type="button"
               className="btn btn-secondary h-10 min-w-[100px] disabled:opacity-60"
@@ -1268,6 +1286,7 @@ export default function HomePage() {
             >
               {rescanning || data?.scanInProgress ? "Scanning…" : "Rescan now"}
             </button>
+            </div>
           </div>
         </div>
       </section>
