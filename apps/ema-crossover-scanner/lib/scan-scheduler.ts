@@ -62,9 +62,21 @@ export function scheduleBackgroundTask(task: () => Promise<void>): void {
   void task().catch(() => undefined);
 }
 
+function pickForceRescanChunk(
+  chunkOffset: number,
+  symbolCount: number,
+): (typeof CF_SCAN_CHUNKS)[number] | null {
+  for (const chunk of CF_SCAN_CHUNKS) {
+    if (chunk.offset < chunkOffset) continue;
+    if (chunk.offset >= symbolCount) return null;
+    return chunk;
+  }
+  return null;
+}
+
 async function pickCloudflareScanChunk(
   overrides: Partial<ScanJobConfig>,
-  options: { force?: boolean },
+  options: { force?: boolean; chunkOffset?: number },
 ): Promise<(typeof CF_SCAN_CHUNKS)[number] | null> {
   const config = resolveScanJobConfig(overrides);
   const { symbols } = await buildSymbolUniverse({
@@ -73,6 +85,11 @@ async function pickCloudflareScanChunk(
     customSymbols: config.customSymbols,
     tradingViewWatchlistUrl: config.tradingViewWatchlistUrl,
   });
+
+  if (options.force === true) {
+    return pickForceRescanChunk(options.chunkOffset ?? 0, symbols.length);
+  }
+
   const snapshot = await loadSnapshot({ enrich: false });
   const bySymbol = new Map(
     snapshot?.results?.map((row) => [row.symbol, row]) ?? [],
@@ -83,7 +100,6 @@ async function pickCloudflareScanChunk(
     const needsScan = slice.some((parsed) => {
       const row = bySymbol.get(parsed.yahoo);
       if (!row) return true;
-      if (options.force === true) return true;
       if (row.error === "Not scanned yet") return true;
       return isRetryableResult(row);
     });
@@ -95,12 +111,31 @@ async function pickCloudflareScanChunk(
 
 export async function runChunkedScan(
   overrides: Partial<ScanJobConfig> = {},
-  options: { force?: boolean } = {},
+  options: { force?: boolean; chunkOffset?: number } = {},
 ): Promise<void> {
   if (isCloudflareWorkersRuntime()) {
+    const config = resolveScanJobConfig(overrides);
+    const { symbols } = await buildSymbolUniverse({
+      includeBlueChips: config.includeBlueChips,
+      watchlistText: config.watchlistText,
+      customSymbols: config.customSymbols,
+      tradingViewWatchlistUrl: config.tradingViewWatchlistUrl,
+    });
+
     const chunk = await pickCloudflareScanChunk(overrides, options);
     if (!chunk) return;
-    await runScanChunk(chunk.offset, chunk.limit, overrides, options);
+
+    const snapshot = await runScanChunk(chunk.offset, chunk.limit, overrides, options);
+    const nextOffset = chunk.offset + chunk.limit;
+
+    if (options.force === true && nextOffset < symbols.length) {
+      scheduleScanJob(overrides, { force: true, chunkOffset: nextOffset });
+      return;
+    }
+
+    if (!options.force && snapshot && !snapshot.scanComplete) {
+      scheduleScanJob(overrides, options);
+    }
     return;
   }
 
@@ -123,7 +158,7 @@ let scanJobQueued = false;
 
 export function scheduleScanJob(
   overrides: Partial<ScanJobConfig> = {},
-  options: { force?: boolean } = {},
+  options: { force?: boolean; chunkOffset?: number } = {},
 ): void {
   if (scanJobQueued) return;
 

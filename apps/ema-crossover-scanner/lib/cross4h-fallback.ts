@@ -11,13 +11,24 @@ function hasCross(cross?: {
 export function fillCross4hFromCross1h(row: StockScanResult): StockScanResult {
   if (!hasCross(row.cross1h) || hasCross(row.cross4h)) return row;
 
+  let crossoverMsAgo = row.cross1h.crossoverMsAgo;
+  if (row.cross1h.crossoverAt) {
+    const atMs = Date.parse(row.cross1h.crossoverAt);
+    if (Number.isFinite(atMs)) {
+      const derived = Date.now() - atMs;
+      if (derived > 0 && (crossoverMsAgo == null || crossoverMsAgo <= 0)) {
+        crossoverMsAgo = derived;
+      }
+    }
+  }
+
   return {
     ...row,
     cross4h: {
       crossoverAt: row.cross1h.crossoverAt,
       crossoverDate: row.cross1h.crossoverDate,
       crossoverTime: row.cross1h.crossoverTime,
-      crossoverMsAgo: row.cross1h.crossoverMsAgo,
+      crossoverMsAgo,
     },
   };
 }

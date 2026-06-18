@@ -39,11 +39,22 @@ export function normalizeCrossover(
 ): CrossoverDisplay {
   if (!cross) return { ...EMPTY_CROSSOVER };
 
+  let crossoverMsAgo = cross.crossoverMsAgo ?? null;
+  if (cross.crossoverAt) {
+    const atMs = Date.parse(cross.crossoverAt);
+    if (Number.isFinite(atMs)) {
+      const derived = Date.now() - atMs;
+      if (derived > 0 && (crossoverMsAgo == null || crossoverMsAgo <= 0)) {
+        crossoverMsAgo = derived;
+      }
+    }
+  }
+
   return {
     crossoverAt: cross.crossoverAt ?? null,
     crossoverDate: cross.crossoverDate ?? null,
     crossoverTime: cross.crossoverTime ?? null,
-    crossoverMsAgo: cross.crossoverMsAgo ?? null,
+    crossoverMsAgo,
   };
 }
 

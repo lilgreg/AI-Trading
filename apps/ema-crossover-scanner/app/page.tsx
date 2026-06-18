@@ -475,10 +475,15 @@ export default function HomePage() {
       previous: CachedScanResponse | null,
     ): CachedScanResponse => {
       if (!previous?.results?.length) return json;
-      return {
+      const merged = {
         ...json,
         results: mergeScanResultsPreservingQuotes(previous.results, json.results),
       };
+      if (previous.scanInProgress && !json.scanInProgress && json.scannedAt === previous.scannedAt) {
+        merged.scanInProgress = true;
+        merged.scanStartedAt = json.scanStartedAt ?? previous.scanStartedAt;
+      }
+      return merged;
     },
     [],
   );

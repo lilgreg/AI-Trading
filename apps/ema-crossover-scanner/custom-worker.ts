@@ -1,5 +1,6 @@
 import { default as handler } from "./.open-next/worker.js";
 import { runScanChunk } from "./lib/scan-job";
+import { tryServeQuotesApi } from "./lib/worker-quotes-fast";
 import { tryServeScanApi } from "./lib/worker-scan-fast";
 import {
   guardWorkerRequest,
@@ -54,6 +55,9 @@ export default {
 
     const scanApi = await tryServeScanApi(request, env);
     if (scanApi) return scanApi;
+
+    const quotesApi = await tryServeQuotesApi(request, env);
+    if (quotesApi) return quotesApi;
 
     const guard = guardWorkerRequest(request.url);
     if (!guard.allowed) {

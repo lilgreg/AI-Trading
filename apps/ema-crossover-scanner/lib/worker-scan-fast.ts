@@ -127,6 +127,26 @@ async function buildEmptyScanPayload(
   };
 }
 
+/** Cached scan JSON embeds status at write time — overlay live lock/meta for polls. */
+async function overlayLiveScanStatus(
+  payload: Record<string, unknown>,
+  bucket: R2Bucket,
+): Promise<Record<string, unknown>> {
+  const status = await buildStatusPayload(bucket);
+  return {
+    ...payload,
+    scannedAt: status.scannedAt ?? payload.scannedAt,
+    completedAt: status.completedAt ?? payload.completedAt,
+    symbolCount: status.symbolCount ?? payload.symbolCount,
+    stale: status.stale,
+    scanInProgress: status.scanInProgress,
+    cacheEmpty: status.cacheEmpty,
+    scanStartedAt: status.scanStartedAt,
+    staleAfterMinutes: status.staleAfterMinutes,
+    lastError: status.lastError ?? payload.lastError,
+  };
+}
+
 /** Serve scan API from R2 directly — bypasses OpenNext (free-tier 10ms CPU → 1102). */
 async function tryServeScanApi(
   request: Request,
@@ -173,10 +193,12 @@ async function tryServeScanApi(
     });
   }
 
-  return new Response(cached.body, {
-    status: 200,
+  const payload = await overlayLiveScanStatus(
+    (await cached.json()) as Record<string, unknown>,
+    bucket,
+  );
+  return Response.json(payload, {
     headers: {
-      "Content-Type": "application/json; charset=utf-8",
       "Cache-Control": `private, max-age=${SCAN_READ_CACHE_MAX_AGE_SEC}`,
     },
   });

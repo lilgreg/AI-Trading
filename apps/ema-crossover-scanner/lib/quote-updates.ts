@@ -175,17 +175,17 @@ export function applyQuoteUpdates(
       preMarketChange: mergeSessionOnQuotePoll(
         quote.preMarketChange,
         row.preMarketChange,
-        row.sessionSnapshotDate,
+        sessionSnapshotDate,
       ),
       regularMarketChange: mergeSessionOnQuotePoll(
         quote.regularMarketChange,
         row.regularMarketChange,
-        row.sessionSnapshotDate,
+        sessionSnapshotDate,
       ),
       postMarketChange: mergeSessionOnQuotePoll(
         quote.postMarketChange,
         row.postMarketChange,
-        row.sessionSnapshotDate,
+        sessionSnapshotDate,
       ),
       sessionSnapshotDate,
     };
