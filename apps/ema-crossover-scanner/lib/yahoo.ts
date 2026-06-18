@@ -9,6 +9,7 @@ import {
 import { retryWithBackoff, sleep, yahooLimiter } from "./request-limit";
 import { resolveYahooChartSymbol } from "./stocks";
 import {
+  deleteYahooCached,
   getYahooCached,
   setYahooCached,
 } from "./yahoo-cache";
