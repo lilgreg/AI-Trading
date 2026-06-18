@@ -133,8 +133,33 @@ async function overlayLiveScanStatus(
   bucket: R2Bucket,
 ): Promise<Record<string, unknown>> {
   const status = await buildStatusPayload(bucket);
+  const results = Array.isArray(payload.results)
+    ? (payload.results as Array<Record<string, unknown>>).map((row) => {
+        const fixCross = (cross: unknown) => {
+          if (!cross || typeof cross !== "object") return cross;
+          const c = cross as {
+            crossoverAt?: string | null;
+            crossoverMsAgo?: number | null;
+          };
+          if (!c.crossoverAt) return cross;
+          const atMs = Date.parse(c.crossoverAt);
+          if (!Number.isFinite(atMs)) return cross;
+          const derived = Date.now() - atMs;
+          if (derived <= 0) return cross;
+          if (c.crossoverMsAgo != null && c.crossoverMsAgo > 0) return cross;
+          return { ...c, crossoverMsAgo: derived };
+        };
+        return {
+          ...row,
+          cross1h: fixCross(row.cross1h),
+          cross4h: fixCross(row.cross4h),
+        };
+      })
+    : payload.results;
+
   return {
     ...payload,
+    results,
     scannedAt: status.scannedAt ?? payload.scannedAt,
     completedAt: status.completedAt ?? payload.completedAt,
     symbolCount: status.symbolCount ?? payload.symbolCount,

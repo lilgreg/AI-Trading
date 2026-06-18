@@ -2,8 +2,9 @@ import { CACHED_SCAN_API_KEY } from "./scan-api-cache";
 
 const YAHOO_USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
-const DEFAULT_QUOTE_CHUNK = 24;
+const DEFAULT_QUOTE_CHUNK = 12;
 const YAHOO_TIMEOUT_MS = 5_000;
+const YAHOO_PARALLEL = 4;
 
 function parseNonNegativeInt(value: string | null, fallback: number): number {
   const parsed = Number(value ?? fallback);
@@ -33,35 +34,39 @@ function percentChange(current: number, base: number): number | null {
   return ((current - base) / base) * 100;
 }
 
-function parseQuote(raw: Record<string, unknown>) {
-  const previousClose = num(raw.regularMarketPreviousClose);
-  const preMarketPrice = num(raw.preMarketPrice);
-  const regularMarketPrice = num(raw.regularMarketPrice);
-  const postMarketPrice = num(raw.postMarketPrice);
+function parseV8Meta(meta: Record<string, unknown>) {
+  const previousClose =
+    num(meta.chartPreviousClose) ??
+    num(meta.previousClose) ??
+    num(meta.regularMarketPreviousClose);
+  const preMarketPrice = num(meta.preMarketPrice);
+  const regularMarketPrice =
+    num(meta.regularMarketPrice) ?? num(meta.currentPrice);
+  const postMarketPrice = num(meta.postMarketPrice);
 
   const preMarketChange =
     preMarketPrice != null && previousClose != null
       ? percentChange(preMarketPrice, previousClose)
-      : num(raw.preMarketChangePercent);
+      : num(meta.preMarketChangePercent);
 
   const regularMarketChange =
     regularMarketPrice != null && previousClose != null
       ? percentChange(regularMarketPrice, previousClose)
-      : num(raw.regularMarketChangePercent);
+      : num(meta.regularMarketChangePercent);
 
   const regularClose = regularMarketPrice;
   const postMarketChange =
     postMarketPrice != null && regularClose != null
       ? percentChange(postMarketPrice, regularClose)
-      : num(raw.postMarketChangePercent);
+      : num(meta.postMarketChangePercent);
 
   const price =
+    postMarketPrice ??
     regularMarketPrice ??
     preMarketPrice ??
-    postMarketPrice ??
-    num(raw.regularMarketPrice);
+    num(meta.currentPrice);
 
-  const dailyChange = num(raw.regularMarketChangePercent);
+  const dailyChange = num(meta.regularMarketChangePercent);
 
   return {
     price,
@@ -72,14 +77,13 @@ function parseQuote(raw: Record<string, unknown>) {
   };
 }
 
-async function fetchYahooQuotes(
-  symbols: string[],
-): Promise<Map<string, ReturnType<typeof parseQuote>>> {
-  const unique = [...new Set(symbols.map(resolveYahooSymbol))];
-  if (unique.length === 0) return new Map();
-
-  const url = new URL("https://query1.finance.yahoo.com/v7/finance/quote");
-  url.searchParams.set("symbols", unique.join(","));
+async function fetchV8Quote(symbol: string): Promise<ReturnType<typeof parseV8Meta> | null> {
+  const url = new URL(
+    `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}`,
+  );
+  url.searchParams.set("interval", "1d");
+  url.searchParams.set("range", "1d");
+  url.searchParams.set("includePrePost", "true");
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), YAHOO_TIMEOUT_MS);
@@ -90,28 +94,44 @@ async function fetchYahooQuotes(
       cache: "no-store",
       signal: controller.signal,
     });
-    if (!res.ok) return new Map();
+    if (!res.ok) return null;
 
     const body = (await res.json()) as {
-      quoteResponse?: { result?: Array<Record<string, unknown>> };
+      chart?: { result?: Array<{ meta?: Record<string, unknown> }> };
     };
-
-    const out = new Map<string, ReturnType<typeof parseQuote>>();
-    for (const raw of body.quoteResponse?.result ?? []) {
-      const sym =
-        typeof raw.symbol === "string" ? raw.symbol.toUpperCase() : "";
-      if (!sym) continue;
-      out.set(sym, parseQuote(raw));
-    }
-    return out;
+    const meta = body.chart?.result?.[0]?.meta;
+    if (!meta) return null;
+    return parseV8Meta(meta);
   } catch {
-    return new Map();
+    return null;
   } finally {
     clearTimeout(timer);
   }
 }
 
-/** Serve GET /api/quotes from R2 + Yahoo v7 — bypasses OpenNext (1102). */
+async function fetchYahooQuotes(
+  symbols: string[],
+): Promise<Map<string, ReturnType<typeof parseV8Meta>>> {
+  const out = new Map<string, ReturnType<typeof parseV8Meta>>();
+  const unique = [...new Set(symbols.map(resolveYahooSymbol))];
+
+  for (let i = 0; i < unique.length; i += YAHOO_PARALLEL) {
+    const batch = unique.slice(i, i + YAHOO_PARALLEL);
+    const results = await Promise.all(
+      batch.map(async (symbol) => ({
+        symbol,
+        quote: await fetchV8Quote(symbol),
+      })),
+    );
+    for (const { symbol, quote } of results) {
+      if (quote) out.set(symbol, quote);
+    }
+  }
+
+  return out;
+}
+
+/** Serve GET /api/quotes from R2 + Yahoo v8 — bypasses OpenNext (1102). */
 async function tryServeQuotesApi(
   request: Request,
   env: CloudflareEnv,
