@@ -47,18 +47,6 @@ async function releaseScanLockR2(bucket: R2Bucket): Promise<void> {
   });
 }
 
-async function acquireScanLockR2(bucket: R2Bucket): Promise<ScanLock> {
-  const now = Date.now();
-  const lock: ScanLock = {
-    startedAt: new Date(now).toISOString(),
-    expiresAt: new Date(now + LOCK_TTL_MS).toISOString(),
-  };
-  await bucket.put(LOCK_KEY, JSON.stringify(lock), {
-    httpMetadata: { contentType: "application/json" },
-  });
-  return lock;
-}
-
 /** Inline recoverStuckScanState for R2 fast-path (no OpenNext / scan-cache import). */
 async function recoverOrphanScanLockR2(
   bucket: R2Bucket,
