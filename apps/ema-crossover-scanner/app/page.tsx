@@ -506,7 +506,7 @@ export default function HomePage() {
       if (!res.ok) {
         const text = await res.text().catch(() => "");
         noteWorkerRateLimit(res.status, text);
-        if (res.status === 429 || text.includes("1027")) {
+        if (res.status === 429 || text.includes("1027") || text.includes("1102")) {
           const msg = formatRateLimitError();
           setRateLimitMsg(msg);
           if (!options?.quiet) setError(msg);

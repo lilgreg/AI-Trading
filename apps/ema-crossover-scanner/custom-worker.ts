@@ -1,5 +1,6 @@
 import { default as handler } from "./.open-next/worker.js";
 import { runScanChunk } from "./lib/scan-job";
+import { tryServeScanApi } from "./lib/worker-scan-fast";
 import {
   guardWorkerRequest,
   recordGlobalRequest,
@@ -45,6 +46,9 @@ export default {
   async fetch(request: Request, env: CloudflareEnv, ctx: ExecutionContext) {
     const asset = await tryServeAsset(request, env);
     if (asset) return asset;
+
+    const scanApi = await tryServeScanApi(request, env);
+    if (scanApi) return scanApi;
 
     const guard = guardWorkerRequest(request.url);
     if (!guard.allowed) {

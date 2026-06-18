@@ -395,9 +395,11 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    responseSnapshot = await applyCross4hFallback(responseSnapshot, {
-      persist: heal,
-    });
+    if (heal) {
+      responseSnapshot = await applyCross4hFallback(responseSnapshot, {
+        persist: true,
+      });
+    }
 
     const cacheControl =
       heal || force

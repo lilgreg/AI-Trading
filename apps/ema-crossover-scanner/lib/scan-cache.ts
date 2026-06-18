@@ -188,6 +188,8 @@ export async function saveSnapshot(snapshot: ScanSnapshot): Promise<void> {
     try {
       await storage.saveSnapshot(snapshot);
       await saveScanMeta(snapshot);
+      const { writeScanApiCache } = await import("./scan-api-cache");
+      await writeScanApiCache(snapshot);
     } catch (err) {
       const message =
         err instanceof Error ? err.message : "Snapshot write failed";
@@ -199,6 +201,8 @@ export async function saveSnapshot(snapshot: ScanSnapshot): Promise<void> {
   try {
     await storage.saveSnapshot(snapshot);
     await saveScanMeta(snapshot);
+    const { writeScanApiCache } = await import("./scan-api-cache");
+    await writeScanApiCache(snapshot).catch(() => undefined);
   } catch (err) {
     const message =
       err instanceof Error ? err.message : "Local snapshot write failed";
