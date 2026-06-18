@@ -46,6 +46,35 @@ function stripHtml(value: string): string {
   return value.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
 }
 
+const BOILERPLATE_RE =
+  /^(skip to navigation|yahoo finance is not a broker|the above button links|sign in to view)/i;
+const AFFILIATE_RE =
+  /coinbase|broker-dealer|cryptocurrencies for sale|facilitate trading/i;
+
+function isUsefulParagraph(text: string): boolean {
+  if (text.length < 50) return false;
+  if (BOILERPLATE_RE.test(text)) return false;
+  if (AFFILIATE_RE.test(text)) return false;
+  if (/^skip to /i.test(text)) return false;
+  return true;
+}
+
+function joinUsefulParagraphs(parts: string[]): string {
+  return parts.filter(isUsefulParagraph).join("\n\n");
+}
+
+function extractCanonicalUrl(html: string): string | null {
+  const patterns = [
+    /<link[^>]+rel=["']canonical["'][^>]+href=["']([^"']+)["']/i,
+    /<link[^>]+href=["']([^"']+)["'][^>]+rel=["']canonical["']/i,
+  ];
+  for (const pattern of patterns) {
+    const match = html.match(pattern);
+    if (match?.[1]) return match[1];
+  }
+  return null;
+}
+
 function extractJsonLdText(html: string): string | null {
   const scripts = html.matchAll(
     /<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi,
@@ -153,7 +182,7 @@ function extractYahooCaasParagraphs(html: string): string | null {
     const text = stripHtml(decodeHtmlEntities(p[1]));
     if (text.length > 40) parts.push(text);
   }
-  const combined = parts.join("\n\n");
+  const combined = joinUsefulParagraphs(parts);
   return combined.length > 80 ? combined : null;
 }
 
@@ -173,19 +202,19 @@ function extractArticleParagraphs(html: string): string | null {
       const text = stripHtml(decodeHtmlEntities(p[1]));
       if (text.length > 40) parts.push(text);
     }
-    const combined = parts.join("\n\n");
+    const combined = joinUsefulParagraphs(parts);
     if (combined.length > best.length) best = combined;
   }
 
-  if (best.length < 200) {
+  if (best.length < MIN_USEFUL_LEN) {
     const allParagraphs = html.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/gi);
     const parts: string[] = [];
     for (const p of allParagraphs) {
       const text = stripHtml(decodeHtmlEntities(p[1]));
       if (text.length > 60) parts.push(text);
-      if (parts.join("\n\n").length > MAX_SUMMARY_LEN) break;
+      if (joinUsefulParagraphs(parts).length > MAX_SUMMARY_LEN) break;
     }
-    const fallback = parts.join("\n\n");
+    const fallback = joinUsefulParagraphs(parts);
     if (fallback.length > best.length) best = fallback;
   }
 
@@ -244,13 +273,40 @@ function extractFullArticleText(html: string): string | null {
   );
 }
 
+async function fetchCanonicalArticleText(
+  html: string,
+  sourceUrl: string,
+): Promise<string | null> {
+  const href = extractCanonicalUrl(html);
+  if (!href) return null;
+
+  let canonicalUrl: string;
+  try {
+    canonicalUrl = new URL(href, sourceUrl).toString();
+  } catch {
+    return null;
+  }
+  if (canonicalUrl === sourceUrl) return null;
+
+  const canonicalHtml = await fetchPreviewHtml(canonicalUrl);
+  if (!canonicalHtml) return null;
+  return extractFullArticleText(canonicalHtml);
+}
+
 async function scrapeSummary(
   url: string,
 ): Promise<{ summary: string | null; fullText: string | null }> {
   const html = await fetchPreviewHtml(url);
   if (!html) return { summary: null, fullText: null };
 
-  const fullText = extractFullArticleText(html);
+  let fullText = extractFullArticleText(html);
+  if (!fullText || fullText.length < MIN_USEFUL_LEN) {
+    const canonicalText = await fetchCanonicalArticleText(html, url);
+    if (canonicalText && canonicalText.length > (fullText?.length ?? 0)) {
+      fullText = canonicalText;
+    }
+  }
+
   const metaSummary = extractMetaSummary(html);
   const summary = longestText(fullText, metaSummary);
 

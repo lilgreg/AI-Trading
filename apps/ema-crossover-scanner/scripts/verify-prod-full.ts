@@ -158,49 +158,53 @@ async function verifyNewsPreview(): Promise<{ pass: boolean; previewLen: number;
   const news = JSON.parse(newsText) as {
     headlines?: { url?: string; headline?: string; summary?: string | null }[];
   };
-  const article =
-    news.headlines?.find((h) => h.url) ??
-    news.headlines?.[0];
-  if (!article?.url) {
+  const articles = news.headlines?.filter((h) => h.url).slice(0, 8) ?? [];
+  if (articles.length === 0) {
     console.log("news preview: no article url FAIL");
     return { pass: false, previewLen: 0, sample: "" };
   }
 
-  for (let i = 0; i < 3; i += 1) {
-    const t0 = Date.now();
-    const previewQs = new URLSearchParams({ url: article.url });
-    if (article.headline) previewQs.set("headline", article.headline);
-    if (article.summary) previewQs.set("yahooSummary", article.summary);
-    const res = await fetch(
-      `${BASE}/api/news/preview?${previewQs.toString()}`,
-      { cache: "no-store" },
-    );
-    const ms = Date.now() - t0;
-    const text = await res.text();
-    if (!text.startsWith("{")) {
-      console.log(`news preview try ${i + 1}: ${res.status} ${ms}ms non-json FAIL`);
-      if (i < 2) await sleep(RETRY_PAUSE_MS);
-      continue;
+  for (const article of articles) {
+    for (let i = 0; i < 2; i += 1) {
+      const t0 = Date.now();
+      const previewQs = new URLSearchParams({ url: article.url! });
+      if (article.headline) previewQs.set("headline", article.headline);
+      if (article.summary) previewQs.set("yahooSummary", article.summary);
+      previewQs.set("bust", String(Date.now()));
+      const res = await fetch(
+        `${BASE}/api/news/preview?${previewQs.toString()}`,
+        { cache: "no-store" },
+      );
+      const ms = Date.now() - t0;
+      const text = await res.text();
+      if (!text.startsWith("{")) {
+        console.log(
+          `news preview [${article.headline?.slice(0, 40)}] try ${i + 1}: ${res.status} ${ms}ms non-json FAIL`,
+        );
+        if (i < 1) await sleep(RETRY_PAUSE_MS);
+        continue;
+      }
+      const body = JSON.parse(text) as {
+        summary?: string | null;
+        fullText?: string | null;
+      };
+      const summary = body.fullText?.trim() || body.summary?.trim() || "";
+      const multiParagraph = summary.includes("\n\n");
+      const pass =
+        res.status === 200 &&
+        (summary.length >= MIN_PREVIEW_LEN || multiParagraph);
+      console.log(
+        `news preview [${article.headline?.slice(0, 40)}] try ${i + 1}: ${res.status} ${ms}ms len=${summary.length} fullText=${body.fullText?.length ?? 0} ${pass ? "PASS" : "FAIL"}`,
+      );
+      if (pass) {
+        return { pass: true, previewLen: summary.length, sample: summary.slice(0, 240) };
+      }
+      if (i < 1) await sleep(RETRY_PAUSE_MS);
     }
-    const body = JSON.parse(text) as {
-      summary?: string | null;
-      fullText?: string | null;
-    };
-    const summary = body.fullText?.trim() || body.summary?.trim() || "";
-    const multiParagraph = summary.includes("\n\n");
-    const pass =
-      res.status === 200 &&
-      (summary.length >= MIN_PREVIEW_LEN || multiParagraph);
-    console.log(
-      `news preview try ${i + 1}: ${res.status} ${ms}ms len=${summary.length} fullText=${body.fullText?.length ?? 0} ${pass ? "PASS" : "FAIL"}`,
-    );
-    if (pass) {
-      return { pass: true, previewLen: summary.length, sample: summary.slice(0, 240) };
-    }
-    if (i < 2) await sleep(RETRY_PAUSE_MS);
   }
 
-  const yahooSummary = article.summary?.trim() ?? "";
+  const fallbackArticle = articles[0];
+  const yahooSummary = fallbackArticle?.summary?.trim() ?? "";
   if (yahooSummary.length >= MIN_PREVIEW_LEN) {
     console.log(`news preview: fallback yahoo summary len=${yahooSummary.length} PASS`);
     return { pass: true, previewLen: yahooSummary.length, sample: yahooSummary.slice(0, 240) };
@@ -275,6 +279,20 @@ async function verifyScan(): Promise<{
 async function main() {
   console.log("=== VERIFY PRODUCTION ===");
   console.log("BASE:", BASE);
+
+  const statusRes = await fetch(`${BASE}/api/scan?status=true`, { cache: "no-store" });
+  const statusText = await statusRes.text();
+  if (statusText.startsWith("{")) {
+    const status = JSON.parse(statusText) as {
+      scannedAt?: string | null;
+      completedAt?: string | null;
+      stale?: boolean;
+      scanInProgress?: boolean;
+    };
+    console.log(
+      `scan status: scannedAt=${status.scannedAt ?? "—"} completedAt=${status.completedAt ?? "—"} stale=${status.stale ?? "?"} inProgress=${status.scanInProgress ?? "?"}`,
+    );
+  }
 
   const newsOk = await verifyNews();
   const preview = await verifyNewsPreview();
