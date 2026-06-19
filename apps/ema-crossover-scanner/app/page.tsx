@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { formatMsAgo } from "@/lib/ema";
 import { dailyChangeForScanRow } from "@/lib/daily-change";
 import {
@@ -253,8 +253,16 @@ function hasCrossover(cross: CrossoverDisplay | undefined): boolean {
   return Boolean(safe.crossoverAt ?? safe.crossoverDate);
 }
 
-function crossoverMsAgo(cross: CrossoverDisplay | undefined): number | null {
-  return normalizeCrossover(cross).crossoverMsAgo;
+function crossoverSortTimestamp(cross: CrossoverDisplay | undefined): number | null {
+  const safe = normalizeCrossover(cross);
+  if (safe.crossoverAt) {
+    const atMs = Date.parse(safe.crossoverAt);
+    if (Number.isFinite(atMs)) return atMs;
+  }
+  if (safe.crossoverMsAgo != null && safe.crossoverMsAgo >= 0) {
+    return Date.now() - safe.crossoverMsAgo;
+  }
+  return null;
 }
 
 function ariaSortValue(key: SortKey, activeKey: SortKey, dir: SortDir) {
@@ -376,14 +384,97 @@ function ScanTableColgroup() {
   );
 }
 
+function NameSearchHeader({
+  query,
+  open,
+  onQueryChange,
+  onOpenChange,
+  anchorRef,
+  inputRef,
+}: {
+  query: string;
+  open: boolean;
+  onQueryChange: (value: string) => void;
+  onOpenChange: (open: boolean) => void;
+  anchorRef: RefObject<HTMLDivElement | null>;
+  inputRef: RefObject<HTMLInputElement | null>;
+}) {
+  return (
+    <th scope="col">
+      <div ref={anchorRef} className="name-search-wrap">
+        <span>Name</span>
+        <button
+          type="button"
+          className={`name-search-btn${query ? " name-search-btn-active" : ""}`}
+          aria-label="Search by name or symbol"
+          aria-expanded={open}
+          onClick={() => onOpenChange(!open)}
+        >
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden
+          >
+            <circle cx="11" cy="11" r="7" />
+            <path d="M20 20L16.5 16.5" />
+          </svg>
+        </button>
+        {open && (
+          <div className="name-search-popover" role="search">
+            <div className="name-search-input-wrap">
+              <input
+                ref={inputRef}
+                type="search"
+                className="input name-search-input"
+                placeholder="Symbol or company…"
+                value={query}
+                onChange={(e) => onQueryChange(e.target.value)}
+                aria-label="Filter by symbol or company name"
+              />
+              {query && (
+                <button
+                  type="button"
+                  className="name-search-clear"
+                  aria-label="Clear search"
+                  onClick={() => onQueryChange("")}
+                >
+                  ×
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    </th>
+  );
+}
+
 function ScanTableHeaderRow({
   sortKey,
   sortDir,
   onSort,
+  nameSearch,
+  nameSearchOpen,
+  onNameSearchChange,
+  onNameSearchOpenChange,
+  nameSearchAnchorRef,
+  nameSearchInputRef,
 }: {
   sortKey: SortKey;
   sortDir: SortDir;
   onSort: (key: SortKey) => void;
+  nameSearch: string;
+  nameSearchOpen: boolean;
+  onNameSearchChange: (value: string) => void;
+  onNameSearchOpenChange: (open: boolean) => void;
+  nameSearchAnchorRef: RefObject<HTMLDivElement | null>;
+  nameSearchInputRef: RefObject<HTMLInputElement | null>;
 }) {
   return (
     <tr>
@@ -397,7 +488,14 @@ function ScanTableHeaderRow({
       >
         Symbol{sortIndicator(sortKey === "symbol", sortDir)}
       </th>
-      <th scope="col">Name</th>
+      <NameSearchHeader
+        query={nameSearch}
+        open={nameSearchOpen}
+        onQueryChange={onNameSearchChange}
+        onOpenChange={onNameSearchOpenChange}
+        anchorRef={nameSearchAnchorRef}
+        inputRef={nameSearchInputRef}
+      />
       <th scope="col">Price</th>
       <th
         scope="col"
@@ -449,6 +547,8 @@ export default function HomePage() {
   const [rateLimitMsg, setRateLimitMsg] = useState<string | null>(null);
   const [newsError, setNewsError] = useState<string | null>(null);
   const [onlyAbove, setOnlyAbove] = useState(false);
+  const [nameSearch, setNameSearch] = useState("");
+  const [nameSearchOpen, setNameSearchOpen] = useState(false);
   const [sortKey, setSortKey] = useState<SortKey>("cross4h");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [quotesLive, setQuotesLive] = useState(false);
@@ -472,6 +572,8 @@ export default function HomePage() {
   const newsHeadlinesRef = useRef<NewsHeadline[]>([]);
   const seenNewsIdsRef = useRef<Set<string>>(new Set());
   const newsBarRef = useRef<HTMLElement | null>(null);
+  const nameSearchAnchorRef = useRef<HTMLDivElement | null>(null);
+  const nameSearchInputRef = useRef<HTMLInputElement | null>(null);
 
   const applyScanPayload = useCallback(
     (
@@ -1153,11 +1255,49 @@ export default function HomePage() {
     }
   };
 
+  useEffect(() => {
+    if (!nameSearchOpen) return;
+
+    const focusTimer = window.setTimeout(() => {
+      nameSearchInputRef.current?.focus();
+    }, 0);
+
+    const onPointerDown = (event: MouseEvent) => {
+      const anchor = nameSearchAnchorRef.current;
+      if (anchor && !anchor.contains(event.target as Node)) {
+        setNameSearchOpen(false);
+      }
+    };
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setNameSearchOpen(false);
+    };
+
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.clearTimeout(focusTimer);
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [nameSearchOpen]);
+
   const filteredResults = useMemo(() => {
     if (!data?.results) return [];
-    if (!onlyAbove) return data.results;
-    return data.results.filter((r) => r.ema20Above50 && !r.error);
-  }, [data, onlyAbove]);
+    let rows = data.results;
+    if (onlyAbove) {
+      rows = rows.filter((r) => r.ema20Above50 && !r.error);
+    }
+    const q = nameSearch.trim().toLowerCase();
+    if (q) {
+      rows = rows.filter((r) => {
+        const symbol = (r.displayTicker ?? r.symbol ?? "").toLowerCase();
+        const name = (r.name ?? "").toLowerCase();
+        return symbol.includes(q) || name.includes(q);
+      });
+    }
+    return rows;
+  }, [data, onlyAbove, nameSearch]);
 
   const sortedResults = useMemo(() => {
     if (filteredResults.length === 0) return [];
@@ -1182,15 +1322,15 @@ export default function HomePage() {
       } else if (sortKey === "patterns") {
         cmp = rowPatternSortKey(a.patterns) - rowPatternSortKey(b.patterns);
       } else if (sortKey === "cross1h") {
-        const aVal = crossoverMsAgo(a.cross1h);
-        const bVal = crossoverMsAgo(b.cross1h);
+        const aVal = crossoverSortTimestamp(a.cross1h);
+        const bVal = crossoverSortTimestamp(b.cross1h);
         if (aVal == null && bVal == null) cmp = 0;
         else if (aVal == null) cmp = 1;
         else if (bVal == null) cmp = -1;
         else cmp = aVal - bVal;
       } else {
-        const aVal = crossoverMsAgo(a.cross4h);
-        const bVal = crossoverMsAgo(b.cross4h);
+        const aVal = crossoverSortTimestamp(a.cross4h);
+        const bVal = crossoverSortTimestamp(b.cross4h);
         if (aVal == null && bVal == null) cmp = 0;
         else if (aVal == null) cmp = 1;
         else if (bVal == null) cmp = -1;
@@ -1468,6 +1608,12 @@ export default function HomePage() {
                 sortKey={sortKey}
                 sortDir={sortDir}
                 onSort={handleSort}
+                nameSearch={nameSearch}
+                nameSearchOpen={nameSearchOpen}
+                onNameSearchChange={setNameSearch}
+                onNameSearchOpenChange={setNameSearchOpen}
+                nameSearchAnchorRef={nameSearchAnchorRef}
+                nameSearchInputRef={nameSearchInputRef}
               />
             </thead>
           </table>
