@@ -199,6 +199,13 @@ export async function runForceRescanChunk(
     console.warn(
       `Force rescan chunk offset=${chunkOffset} skipped (lock held)`,
     );
+    const selfRef = env.WORKER_SELF_REFERENCE;
+    if (selfRef) {
+      const retryUrl = new URL("https://worker/api/scan");
+      retryUrl.searchParams.set("force", "continue");
+      retryUrl.searchParams.set("chunkOffset", String(chunkOffset));
+      await selfRef.fetch(retryUrl.toString());
+    }
     return;
   }
 

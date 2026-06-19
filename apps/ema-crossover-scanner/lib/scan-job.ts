@@ -193,13 +193,16 @@ async function mergeScanResults(
   overrides: Partial<ScanJobConfig>,
   options: {
     rescanAll?: boolean;
+    /** Chunked force rescan: rescan filtered slice but keep prior snapshot rows. */
+    forceRescanSlice?: boolean;
     symbolFilter?: (parsed: ParsedSymbol) => boolean;
     maxSymbols?: number;
   } = {},
 ): Promise<ScanSnapshot | null> {
   const config = resolveScanJobConfig(overrides);
   const configKey = buildConfigKey(config);
-  const rescanAll = options.rescanAll === true;
+  const forceRescanSlice = options.forceRescanSlice === true;
+  const rescanAll = options.rescanAll === true && !forceRescanSlice;
 
   const { symbols, sources, tradingViewWatchlistName } =
     await buildSymbolUniverse({
@@ -224,7 +227,11 @@ async function mergeScanResults(
   }
 
   const resultsBySymbol = new Map<string, StockScanResult>();
-  if (!rescanAll) {
+  if (forceRescanSlice) {
+    for (const [symbol, row] of existingBySymbol) {
+      resultsBySymbol.set(symbol, row);
+    }
+  } else if (!rescanAll) {
     for (const [symbol, row] of existingBySymbol) {
       if (isSuccessfulResult(row)) {
         resultsBySymbol.set(symbol, row);
@@ -233,11 +240,21 @@ async function mergeScanResults(
   }
 
   const previousCompletedAt = existing?.completedAt ?? null;
-  const fallbackBySymbol = rescanAll ? new Map<string, StockScanResult>() : existingBySymbol;
+  const fallbackBySymbol = rescanAll
+    ? new Map<string, StockScanResult>()
+    : existingBySymbol;
 
-  let toScan = symbolsNeedingScan(symbols, existingBySymbol, rescanAll);
-  if (options.symbolFilter) {
-    toScan = toScan.filter(options.symbolFilter);
+  let toScan: ParsedSymbol[];
+  if (forceRescanSlice) {
+    toScan = symbols;
+    if (options.symbolFilter) {
+      toScan = toScan.filter(options.symbolFilter);
+    }
+  } else {
+    toScan = symbolsNeedingScan(symbols, existingBySymbol, rescanAll);
+    if (options.symbolFilter) {
+      toScan = toScan.filter(options.symbolFilter);
+    }
   }
   if (options.maxSymbols != null && options.maxSymbols > 0) {
     toScan = toScan.slice(0, options.maxSymbols);
@@ -356,7 +373,7 @@ export async function runScanChunk(
     );
 
     return await mergeScanResults(overrides, {
-      rescanAll: options.force === true,
+      forceRescanSlice: options.force === true,
       symbolFilter: (parsed) => slice.has(parsed.yahoo),
     });
   } catch (err) {

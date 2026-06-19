@@ -486,9 +486,11 @@ export default function HomePage() {
 
   const fetchCache = useCallback(async (options?: { quiet?: boolean; heal?: boolean }) => {
     if (isWorkerRateLimited()) {
-      const msg = formatRateLimitError();
-      setRateLimitMsg(msg);
-      if (!options?.quiet) setError(msg);
+      if (!options?.quiet) {
+        const msg = formatRateLimitError();
+        setRateLimitMsg(msg);
+        setError(msg);
+      }
       return;
     }
 
@@ -500,18 +502,22 @@ export default function HomePage() {
       const healQuery = options?.heal === true ? "?heal=1" : "";
       const res = await clientFetch(`/api/scan${healQuery}`, { cache: "no-store" });
       if (!res) {
-        const msg = formatRateLimitError();
-        setRateLimitMsg(msg);
-        if (!options?.quiet) setError(msg);
+        if (!options?.quiet) {
+          const msg = formatRateLimitError();
+          setRateLimitMsg(msg);
+          setError(msg);
+        }
         return;
       }
       if (!res.ok) {
         const text = await res.text().catch(() => "");
         if (isWorkerRateLimitResponse(res.status, text)) {
           noteWorkerRateLimit(res.status, text);
-          const msg = formatRateLimitError();
-          setRateLimitMsg(msg);
-          if (!options?.quiet) setError(msg);
+          if (!options?.quiet) {
+            const msg = formatRateLimitError();
+            setRateLimitMsg(msg);
+            setError(msg);
+          }
           return;
         }
         let body: { error?: string } = {};
@@ -1237,7 +1243,7 @@ export default function HomePage() {
         </p>
       </header>
 
-      {unscannedCount > 0 && (
+      {unscannedCount > 0 && data?.scanInProgress && (
         <div className="card mb-4 border border-[var(--amber)]/40 bg-[var(--amber)]/10 px-4 py-3 text-sm text-[var(--text)]">
           Scanning {unscannedCount} remaining symbol{unscannedCount === 1 ? "" : "s"}…
           Cross and pattern columns fill in as each batch completes.
