@@ -109,7 +109,7 @@ async function buildEmptyScanPayload(
 ): Promise<Record<string, unknown>> {
   const status = await buildStatusPayload(bucket);
   return {
-    scannedAt: status.scannedAt ?? new Date(0).toISOString(),
+    scannedAt: status.scannedAt ?? null,
     symbolCount: (status.symbolCount as number) ?? 0,
     results: [],
     sources: {

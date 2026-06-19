@@ -220,9 +220,13 @@ async function mergeScanResults(
 
   const existing = await loadSnapshot();
   const existingBySymbol = new Map<string, StockScanResult>();
-  if (existing?.configKey === configKey && existing.results?.length) {
-    for (const row of existing.results) {
-      existingBySymbol.set(row.symbol, row);
+  if (existing?.results?.length) {
+    const seedExisting =
+      forceRescanSlice || existing.configKey === configKey;
+    if (seedExisting) {
+      for (const row of existing.results) {
+        existingBySymbol.set(row.symbol, row);
+      }
     }
   }
 
@@ -290,19 +294,13 @@ async function mergeScanResults(
           const prior =
             resultsBySymbol.get(result.symbol) ??
             fallbackBySymbol.get(result.symbol);
-          const keepPrior =
-            prior != null &&
-            isSuccessfulResult(prior) &&
-            Boolean(result.error) &&
-            result.ema20 == null;
+          const next = mergeScanResultPreservingQuotes(result, prior);
 
-          let next = keepPrior ? prior : result;
-
-          if (prior && !keepPrior) {
-            next = mergeScanResultsPreservingQuotes([prior], [result])[0];
-          }
-
-          resultsBySymbol.set(result.symbol, { ...next, universeIndex: symbolIndexByYahoo.get(result.symbol) });
+          resultsBySymbol.set(result.symbol, {
+            ...next,
+            universeIndex:
+              symbolIndexByYahoo.get(result.symbol) ?? next.universeIndex,
+          });
           completedSinceSave += 1;
           if (completedSinceSave >= PARTIAL_SAVE_EVERY) {
             completedSinceSave = 0;
@@ -461,8 +459,25 @@ function mergeScanResultPreservingQuotes(
 ): StockScanResult {
   if (!prior) return incoming;
 
-  if (isSuccessfulResult(prior) && incoming.error && incoming.ema20 == null) {
-    return { ...prior, universeIndex: incoming.universeIndex ?? prior.universeIndex };
+  if (incoming.error && incoming.ema20 == null && prior.ema20 != null) {
+    return {
+      ...prior,
+      price: incoming.price ?? prior.price,
+      preMarketChange: incoming.preMarketChange ?? prior.preMarketChange,
+      regularMarketChange:
+        incoming.regularMarketChange ?? prior.regularMarketChange,
+      postMarketChange: incoming.postMarketChange ?? prior.postMarketChange,
+      sessionSnapshotDate:
+        incoming.sessionSnapshotDate ?? prior.sessionSnapshotDate,
+      name: incoming.name ?? prior.name,
+      logoUrl: incoming.logoUrl ?? prior.logoUrl,
+      tradingViewUrl:
+        incoming.tradingViewUrl && incoming.tradingViewUrl !== "#"
+          ? incoming.tradingViewUrl
+          : prior.tradingViewUrl,
+      universeIndex: incoming.universeIndex ?? prior.universeIndex,
+      error: undefined,
+    };
   }
 
   if (incoming.error) {
@@ -476,7 +491,7 @@ function mergeScanResultPreservingQuotes(
     };
   }
 
-  return incoming;
+  return mergeScanResultsPreservingQuotes([prior], [incoming])[0];
 }
 
 const HEAL_MAX_PER_REQUEST = isCloudflareWorkersRuntime() ? 4 : 12;

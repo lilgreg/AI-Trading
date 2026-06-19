@@ -1,5 +1,5 @@
 import { sanitizeChartError } from "./chart-error-sanitize";
-import { stripDisplayTicker } from "./stocks";
+import { resolveTradingViewChartUrl, stripDisplayTicker } from "./stocks";
 import type {
   CachedScanResponse,
   CrossoverDisplay,
@@ -86,7 +86,7 @@ export function normalizeScanResult(row: LegacyScanRow): StockScanResult {
     ema20Above50: Boolean(row.ema20Above50),
     cross1h: normalizeCrossover(row.cross1h ?? legacyCross),
     cross4h: normalizeCrossover(row.cross4h ?? legacyCross),
-    tradingViewUrl: row.tradingViewUrl ?? "#",
+    tradingViewUrl: resolveTradingViewChartUrl(row),
     logoUrl: row.logoUrl ?? null,
     dataSource: row.dataSource ?? null,
     universeIndex: row.universeIndex,

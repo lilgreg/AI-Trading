@@ -499,6 +499,25 @@ export function tradingViewChartUrl(
   return `https://www.tradingview.com/chart/${layout}/?${params.toString()}`;
 }
 
+/** Resolve chart link — backfill when cached row lost its URL during a failed rescan. */
+export function resolveTradingViewChartUrl(row: {
+  tradingViewUrl?: string | null;
+  tradingViewSymbol?: string | null;
+  displaySymbol?: string | null;
+  symbol?: string | null;
+}): string {
+  const url = row.tradingViewUrl?.trim();
+  if (url && url !== "#" && url.startsWith("https://www.tradingview.com/")) {
+    return url;
+  }
+  const sym =
+    row.tradingViewSymbol?.trim() ||
+    row.displaySymbol?.trim() ||
+    row.symbol?.trim();
+  if (sym && sym !== "—") return tradingViewChartUrl(sym, "4h");
+  return "#";
+}
+
 export function blueChipCount(): number {
   return BLUE_CHIP_SYMBOLS.length;
 }

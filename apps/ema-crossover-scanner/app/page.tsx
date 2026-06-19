@@ -13,7 +13,7 @@ import {
 } from "@/lib/normalize-scan-result";
 import { patternSortKey } from "@/lib/pattern-sort";
 import { isStooqChartError, sanitizeChartError } from "@/lib/chart-error-sanitize";
-import { stripDisplayTicker } from "@/lib/stocks";
+import { stripDisplayTicker, resolveTradingViewChartUrl } from "@/lib/stocks";
 import { applyQuoteUpdates, mergeScanResultIntoRows, mergeScanResultsPreservingQuotes } from "@/lib/quote-updates";
 import { StockLogo } from "@/components/stock-logo";
 import { NewsArticleModal } from "@/components/news-article-modal";
@@ -70,8 +70,10 @@ function formatSessionChange(value: number | null): string {
 
 function formatScanDataAge(scannedAt: string | null): string {
   if (!scannedAt) return "never";
-  const ms = Date.now() - new Date(scannedAt).getTime();
-  if (ms < 60_000) return "just now";
+  const atMs = Date.parse(scannedAt);
+  if (!Number.isFinite(atMs) || atMs <= 0) return "never";
+  const ms = Date.now() - atMs;
+  if (ms < 0 || ms < 60_000) return "just now";
   return formatMsAgo(ms);
 }
 
@@ -276,6 +278,8 @@ const CHART_ERROR_RETRY_MS = 180_000;
 const CHART_ERROR_RETRY_STAGGER_MS = 5_000;
 const CHART_ERROR_MAX_PER_CYCLE = 2;
 const SCAN_POLL_MS = 60_000;
+/** Client-side auto-retry rescans corrupt prod when chart fetches fail — manual/cron only. */
+const CLIENT_AUTO_RESCAN = false;
 const HEAL_POLL_MS = 300_000;
 const COORDINATOR_TICK_MS = 20_000;
 const INITIAL_NEWS_DELAY_MS = 20_000;
@@ -922,6 +926,10 @@ export default function HomePage() {
 
   useEffect(() => {
     const tick = () => {
+      if (data?.scanInProgress) {
+        setRateLimitMsg(null);
+        return;
+      }
       setRateLimitMsg(
         shouldShowRateLimitBanner() ? formatRateLimitError() : null,
       );
@@ -929,7 +937,7 @@ export default function HomePage() {
     tick();
     const id = setInterval(tick, 1_000);
     return () => clearInterval(id);
-  }, []);
+  }, [data?.scanInProgress]);
 
   useEffect(() => {
     const coordinator = createPollCoordinator({
@@ -1034,6 +1042,7 @@ export default function HomePage() {
     !data?.scanInProgress;
 
   useEffect(() => {
+    if (!CLIENT_AUTO_RESCAN) return;
     if (retryPollRef.current) clearInterval(retryPollRef.current);
     if (!data || data.cacheEmpty || data.scanInProgress) return;
     if (!shouldRetryFailed) {
@@ -1053,6 +1062,7 @@ export default function HomePage() {
   }, [data?.cacheEmpty, data?.scanInProgress, shouldRetryFailed, retryFailedScan]);
 
   useEffect(() => {
+    if (!CLIENT_AUTO_RESCAN) return;
     if (tailRetryPollRef.current) clearInterval(tailRetryPollRef.current);
     if (!data || data.cacheEmpty || data.scanInProgress) return;
     if (!shouldRetryTail) {
@@ -1085,6 +1095,7 @@ export default function HomePage() {
     chartErrorCount > 0 && !data?.scanInProgress;
 
   useEffect(() => {
+    if (!CLIENT_AUTO_RESCAN) return;
     if (chartErrorRetryPollRef.current) clearInterval(chartErrorRetryPollRef.current);
     if (!data || data.cacheEmpty || data.scanInProgress) return;
     if (!shouldRetryChartErrors) return;
@@ -1495,7 +1506,7 @@ export default function HomePage() {
                 sortedResults.map((row, index) => {
                   const cross4h = row.cross4h ?? undefined;
                   const cross1h = row.cross1h ?? undefined;
-                  const chartUrl = row.tradingViewUrl ?? "#";
+                  const chartUrl = resolveTradingViewChartUrl(row);
                   const ticker = stripDisplayTicker(
                     row.displayTicker ?? row.symbol ?? "—",
                   );

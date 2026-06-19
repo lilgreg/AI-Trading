@@ -379,7 +379,7 @@ export async function scanSymbols(
     .map((result, index) => (isChartFetchError(result) ? index : -1))
     .filter((index) => index >= 0);
 
-  if (failedIndexes.length === 0) {
+  if (failedIndexes.length === 0 || isCloudflareWorkersRuntime()) {
     return sortByRecentCrossover(results);
   }
 

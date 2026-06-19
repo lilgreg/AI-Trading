@@ -93,10 +93,10 @@ async function tryHandleForceRescan(
 
 /** Cron chunk schedule — small slices to stay under Workers subrequest limits. */
 const SCAN_CRON_CHUNKS: Record<string, { offset: number; limit: number }> = {
-  "0 0 * * *": { offset: 0, limit: 12 },
-  "5 0 * * *": { offset: 12, limit: 12 },
-  "10 0 * * *": { offset: 24, limit: 12 },
-  "15 0 * * *": { offset: 36, limit: 12 },
+  "0 0 * * *": { offset: 0, limit: 4 },
+  "5 0 * * *": { offset: 4, limit: 4 },
+  "10 0 * * *": { offset: 8, limit: 4 },
+  "15 0 * * *": { offset: 12, limit: 4 },
 };
 
 export default {

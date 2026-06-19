@@ -237,6 +237,8 @@ export function formatCrossoverDateTime(date: Date): {
 }
 
 export function formatMsAgo(msAgo: number): string {
+  if (!Number.isFinite(msAgo) || msAgo < 0) return "—";
+
   const minutes = Math.floor(msAgo / 60000);
   if (minutes < 60) return `${minutes}m ago`;
 

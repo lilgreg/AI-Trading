@@ -8,38 +8,13 @@ import {
 } from "./scan-job";
 import { loadSnapshot } from "./scan-cache";
 import { isCloudflareWorkersRuntime } from "./runtime";
+import { sleep } from "./request-limit";
 import { buildSymbolUniverse } from "./symbols";
 
-/** Small chunks for Cloudflare — stay under the 50 subrequest limit per invocation. */
-const CF_SCAN_CHUNKS = [
-  { offset: 0, limit: 12 },
-  { offset: 12, limit: 12 },
-  { offset: 24, limit: 12 },
-  { offset: 36, limit: 12 },
-  { offset: 48, limit: 12 },
-  { offset: 60, limit: 12 },
-  { offset: 72, limit: 12 },
-  { offset: 84, limit: 12 },
-  { offset: 96, limit: 12 },
-  { offset: 108, limit: 12 },
-  { offset: 120, limit: 12 },
-  { offset: 132, limit: 12 },
-  { offset: 144, limit: 12 },
-  { offset: 156, limit: 12 },
-  { offset: 168, limit: 12 },
-  { offset: 180, limit: 12 },
-  { offset: 192, limit: 12 },
-  { offset: 204, limit: 12 },
-  { offset: 216, limit: 12 },
-  { offset: 228, limit: 12 },
-  { offset: 240, limit: 12 },
-  { offset: 252, limit: 12 },
-  { offset: 264, limit: 12 },
-  { offset: 276, limit: 12 },
-  { offset: 288, limit: 12 },
-  { offset: 300, limit: 12 },
-  { offset: 312, limit: 14 },
-] as const;
+/** ~8 subrequests/symbol — keep each CF invocation well under the 50 limit. */
+export const CF_FORCE_RESCAN_CHUNK_SIZE = 4;
+
+export type CfScanChunk = { offset: number; limit: number };
 
 /** Chunk schedule — mirrors custom-worker.ts cron slices. */
 export const SCAN_CHUNKS = [
@@ -65,19 +40,31 @@ export function scheduleBackgroundTask(task: () => Promise<void>): void {
 export function pickForceRescanChunk(
   chunkOffset: number,
   symbolCount: number,
-): (typeof CF_SCAN_CHUNKS)[number] | null {
-  for (const chunk of CF_SCAN_CHUNKS) {
-    if (chunk.offset < chunkOffset) continue;
-    if (chunk.offset >= symbolCount) return null;
-    return chunk;
+): CfScanChunk | null {
+  if (chunkOffset < 0 || chunkOffset >= symbolCount) return null;
+  return {
+    offset: chunkOffset,
+    limit: Math.min(CF_FORCE_RESCAN_CHUNK_SIZE, symbolCount - chunkOffset),
+  };
+}
+
+function* iterateCfScanChunks(symbolCount: number): Generator<CfScanChunk> {
+  for (
+    let offset = 0;
+    offset < symbolCount;
+    offset += CF_FORCE_RESCAN_CHUNK_SIZE
+  ) {
+    yield {
+      offset,
+      limit: Math.min(CF_FORCE_RESCAN_CHUNK_SIZE, symbolCount - offset),
+    };
   }
-  return null;
 }
 
 async function pickCloudflareScanChunk(
   overrides: Partial<ScanJobConfig>,
   options: { force?: boolean; chunkOffset?: number },
-): Promise<(typeof CF_SCAN_CHUNKS)[number] | null> {
+): Promise<CfScanChunk | null> {
   const config = resolveScanJobConfig(overrides);
   const { symbols } = await buildSymbolUniverse({
     includeBlueChips: config.includeBlueChips,
@@ -95,7 +82,7 @@ async function pickCloudflareScanChunk(
     snapshot?.results?.map((row) => [row.symbol, row]) ?? [],
   );
 
-  for (const chunk of CF_SCAN_CHUNKS) {
+  for (const chunk of iterateCfScanChunks(symbols.length)) {
     const slice = symbols.slice(chunk.offset, chunk.offset + chunk.limit);
     const needsScan = slice.some((parsed) => {
       const row = bySymbol.get(parsed.yahoo);
@@ -199,13 +186,6 @@ export async function runForceRescanChunk(
     console.warn(
       `Force rescan chunk offset=${chunkOffset} skipped (lock held)`,
     );
-    const selfRef = env.WORKER_SELF_REFERENCE;
-    if (selfRef) {
-      const retryUrl = new URL("https://worker/api/scan");
-      retryUrl.searchParams.set("force", "continue");
-      retryUrl.searchParams.set("chunkOffset", String(chunkOffset));
-      await selfRef.fetch(retryUrl.toString());
-    }
     return;
   }
 
@@ -222,6 +202,8 @@ export async function runForceRescanChunk(
     console.warn("WORKER_SELF_REFERENCE missing — force rescan chain stopped");
     return;
   }
+
+  await sleep(3_000);
 
   const chainUrl = new URL("https://worker/api/scan");
   chainUrl.searchParams.set("force", "continue");
