@@ -234,6 +234,14 @@ export function getScanStorage(): ScanStorage {
   return storageInstance;
 }
 
+/** Bind R2 from Workers env — required outside OpenNext (custom-worker waitUntil/cron). */
+export function initScanStorageFromEnv(env: CloudflareEnv): void {
+  const bucket = env.SCAN_CACHE_R2_BUCKET;
+  if (bucket) {
+    storageInstance = new R2BindingScanStorage(bucket);
+  }
+}
+
 /** Reset cached storage instance (tests). */
 export function resetScanStorageForTests(): void {
   storageInstance = null;

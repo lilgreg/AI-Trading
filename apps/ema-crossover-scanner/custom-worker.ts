@@ -1,6 +1,7 @@
 import { default as handler } from "./.open-next/worker.js";
-import { runChunkedScan } from "./lib/scan-scheduler";
+import { runForceRescanChunk } from "./lib/scan-scheduler";
 import { runScanChunk } from "./lib/scan-job";
+import { initScanStorageFromEnv } from "./lib/scan-storage";
 import { tryServeQuotesApi } from "./lib/worker-quotes-fast";
 import { tryServeScanApi, tryStartForceRescan } from "./lib/worker-scan-fast";
 import {
@@ -41,6 +42,13 @@ async function tryServeAsset(
   return null;
 }
 
+function parseChunkOffset(url: URL): number {
+  const raw = url.searchParams.get("chunkOffset");
+  const parsed = Number(raw ?? 0);
+  if (!Number.isFinite(parsed) || parsed < 0) return 0;
+  return Math.floor(parsed);
+}
+
 async function tryHandleForceRescan(
   request: Request,
   env: CloudflareEnv,
@@ -48,15 +56,30 @@ async function tryHandleForceRescan(
 ): Promise<Response | null> {
   const url = new URL(request.url);
   if (url.pathname !== "/api/scan") return null;
-  if (url.searchParams.get("force") !== "true") return null;
   if (request.method !== "GET" && request.method !== "POST") return null;
+
+  const force = url.searchParams.get("force") === "true";
+  const continueScan = url.searchParams.get("force") === "continue";
+  if (!force && !continueScan) return null;
+
+  initScanStorageFromEnv(env);
+
+  if (continueScan) {
+    const chunkOffset = parseChunkOffset(url);
+    ctx.waitUntil(
+      runForceRescanChunk(env, chunkOffset).catch((err) => {
+        console.error(`Force rescan continue offset=${chunkOffset} failed:`, err);
+      }),
+    );
+    return new Response(null, { status: 204 });
+  }
 
   const result = await tryStartForceRescan(env);
   if (!result) return null;
 
   if (result.started) {
     ctx.waitUntil(
-      runChunkedScan({}, { force: true }).catch((err) => {
+      runForceRescanChunk(env, 0).catch((err) => {
         console.error("Force rescan failed:", err);
       }),
     );
@@ -114,9 +137,11 @@ export default {
 
   async scheduled(
     controller: ScheduledController,
-    _env: CloudflareEnv,
+    env: CloudflareEnv,
     ctx: ExecutionContext,
   ) {
+    initScanStorageFromEnv(env);
+
     const chunk = SCAN_CRON_CHUNKS[controller.cron];
     if (!chunk) {
       console.warn(`Unhandled cron expression: ${controller.cron}`);
@@ -130,7 +155,7 @@ export default {
           console.log(
             `Cron ${controller.cron} chunk offset=${chunk.offset} limit=${chunk.limit}`,
             snapshot
-              ? `ok symbols=${snapshot.symbolCount} complete=${snapshot.scanComplete}`
+              ? `ok symbols=${snapshot.symbolCount} scannedAt=${snapshot.scannedAt}`
               : "skipped (scan in progress)",
           );
         } catch (err) {

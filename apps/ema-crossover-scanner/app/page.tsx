@@ -479,10 +479,6 @@ export default function HomePage() {
         ...json,
         results: mergeScanResultsPreservingQuotes(previous.results, json.results),
       };
-      if (previous.scanInProgress && !json.scanInProgress && json.scannedAt === previous.scannedAt) {
-        merged.scanInProgress = true;
-        merged.scanStartedAt = json.scanStartedAt ?? previous.scanStartedAt;
-      }
       return merged;
     },
     [],

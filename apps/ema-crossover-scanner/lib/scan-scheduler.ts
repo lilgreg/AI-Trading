@@ -62,7 +62,7 @@ export function scheduleBackgroundTask(task: () => Promise<void>): void {
   void task().catch(() => undefined);
 }
 
-function pickForceRescanChunk(
+export function pickForceRescanChunk(
   chunkOffset: number,
   symbolCount: number,
 ): (typeof CF_SCAN_CHUNKS)[number] | null {
@@ -174,4 +174,50 @@ export function scheduleScanJob(
       scanJobQueued = false;
     }
   });
+}
+
+/** One CF chunk per invocation; chain via WORKER_SELF_REFERENCE for fresh CPU budget. */
+export async function runForceRescanChunk(
+  env: CloudflareEnv,
+  chunkOffset: number,
+): Promise<void> {
+  const config = resolveScanJobConfig({});
+  const { symbols } = await buildSymbolUniverse({
+    includeBlueChips: config.includeBlueChips,
+    watchlistText: config.watchlistText,
+    customSymbols: config.customSymbols,
+    tradingViewWatchlistUrl: config.tradingViewWatchlistUrl,
+  });
+
+  const chunk = pickForceRescanChunk(chunkOffset, symbols.length);
+  if (!chunk) return;
+
+  const snapshot = await runScanChunk(chunk.offset, chunk.limit, {}, {
+    force: true,
+  });
+  if (!snapshot) {
+    console.warn(
+      `Force rescan chunk offset=${chunkOffset} skipped (lock held)`,
+    );
+    return;
+  }
+
+  console.log(
+    `Force rescan chunk offset=${chunk.offset} limit=${chunk.limit}`,
+    `scannedAt=${snapshot.scannedAt} complete=${snapshot.scanComplete}`,
+  );
+
+  const nextOffset = chunk.offset + chunk.limit;
+  if (nextOffset >= symbols.length) return;
+
+  const selfRef = env.WORKER_SELF_REFERENCE;
+  if (!selfRef) {
+    console.warn("WORKER_SELF_REFERENCE missing — force rescan chain stopped");
+    return;
+  }
+
+  const chainUrl = new URL("https://worker/api/scan");
+  chainUrl.searchParams.set("force", "continue");
+  chainUrl.searchParams.set("chunkOffset", String(nextOffset));
+  await selfRef.fetch(chainUrl.toString());
 }

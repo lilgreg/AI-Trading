@@ -41,7 +41,7 @@ export interface ScanJobConfig {
 }
 
 /** Persist partial progress every N completed symbols. */
-const PARTIAL_SAVE_EVERY = 8;
+const PARTIAL_SAVE_EVERY = isCloudflareWorkersRuntime() ? 3 : 8;
 const DEFAULT_RETRY_BATCH = 50;
 
 function parseHistoryDays(value: string | undefined): number {

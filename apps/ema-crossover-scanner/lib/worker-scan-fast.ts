@@ -225,7 +225,9 @@ async function tryServeScanApi(
   const heal =
     url.searchParams.get("heal") === "1" ||
     url.searchParams.get("heal") === "true";
-  const force = url.searchParams.get("force") === "true";
+  const force =
+    url.searchParams.get("force") === "true" ||
+    url.searchParams.get("force") === "continue";
   if (heal || force) return null;
 
   const bucket = env.SCAN_CACHE_R2_BUCKET;
