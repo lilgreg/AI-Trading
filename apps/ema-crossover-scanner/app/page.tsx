@@ -116,8 +116,13 @@ function SessionChangesCell({
   );
 }
 
-function patternBadgeClass(status: PatternDetection["status"]): string {
-  if (status === "Active") return "badge-amber";
+function patternBadgeClass(
+  key: "db" | "dt" | "hs" | "ihs",
+  status: PatternDetection["status"],
+): string {
+  if (status === "Active") {
+    return key === "db" || key === "ihs" ? "badge-green" : "badge-amber";
+  }
   if (status === "Target") return "badge-green";
   if (status === "Failed") return "badge-blue";
   return "badge-muted";
@@ -134,22 +139,22 @@ function PatternsCell({ patterns }: { patterns: StockScanResult["patterns"] }) {
   const safe = normalizePatterns(patterns);
   const lines = [
     {
-      key: "db",
+      key: "db" as const,
       text: formatPatternLabel("DB", safe.doubleBottom),
       status: safe.doubleBottom.status,
     },
     {
-      key: "dt",
+      key: "dt" as const,
       text: formatPatternLabel("DT", safe.doubleTop),
       status: safe.doubleTop.status,
     },
     {
-      key: "hs",
+      key: "hs" as const,
       text: formatPatternLabel("HS", safe.headShoulders),
       status: safe.headShoulders.status,
     },
     {
-      key: "ihs",
+      key: "ihs" as const,
       text: formatPatternLabel("IHS", safe.inverseHeadShoulders),
       status: safe.inverseHeadShoulders.status,
     },
@@ -164,7 +169,7 @@ function PatternsCell({ patterns }: { patterns: StockScanResult["patterns"] }) {
       {lines.map(({ key, text, status }) => (
         <div key={key}>
           <span
-            className={`${patternBadgeClass(status)} inline-block rounded-full px-2.5 py-0.5 text-sm`}
+            className={`${patternBadgeClass(key, status)} inline-block rounded-full px-2.5 py-0.5 text-sm`}
           >
             {text}
           </span>

@@ -91,13 +91,26 @@ async function tryHandleForceRescan(
   });
 }
 
-/** Cron chunk schedule — small slices to stay under Workers subrequest limits. */
-const SCAN_CRON_CHUNKS: Record<string, { offset: number; limit: number }> = {
-  "0 0 * * *": { offset: 0, limit: 4 },
-  "5 0 * * *": { offset: 4, limit: 4 },
-  "10 0 * * *": { offset: 8, limit: 4 },
-  "15 0 * * *": { offset: 12, limit: 4 },
+/** Cron chunk size — small slices to stay under Workers subrequest limits (~8 subreq/symbol). */
+const CRON_CHUNK_SIZE = 4;
+/** Nightly cron expression → chunk index. */
+const CRON_CHUNK_ORDER: Record<string, number> = {
+  "0 0 * * *": 0,
+  "5 0 * * *": 1,
+  "10 0 * * *": 2,
+  "15 0 * * *": 3,
 };
+/** Upper bound for the rotation modulus (real universe ≈ 328). */
+const CRON_MAX_SYMBOLS = 400;
+
+/** Rotate the nightly scan window so all symbols are covered over successive nights. */
+function cronNightBaseOffset(at: Date): number {
+  const symbolsPerNight = CRON_CHUNK_SIZE * Object.keys(CRON_CHUNK_ORDER).length;
+  const start = Date.UTC(at.getUTCFullYear(), 0, 0);
+  const dayOfYear = Math.floor((at.getTime() - start) / 86_400_000);
+  const nights = Math.ceil(CRON_MAX_SYMBOLS / symbolsPerNight);
+  return (dayOfYear % nights) * symbolsPerNight;
+}
 
 export default {
   async fetch(request: Request, env: CloudflareEnv, ctx: ExecutionContext) {
@@ -142,18 +155,22 @@ export default {
   ) {
     initScanStorageFromEnv(env);
 
-    const chunk = SCAN_CRON_CHUNKS[controller.cron];
-    if (!chunk) {
+    const chunkIndex = CRON_CHUNK_ORDER[controller.cron];
+    if (chunkIndex === undefined) {
       console.warn(`Unhandled cron expression: ${controller.cron}`);
       return;
     }
 
+    const offset =
+      cronNightBaseOffset(new Date(controller.scheduledTime)) +
+      chunkIndex * CRON_CHUNK_SIZE;
+
     ctx.waitUntil(
       (async () => {
         try {
-          const snapshot = await runScanChunk(chunk.offset, chunk.limit);
+          const snapshot = await runScanChunk(offset, CRON_CHUNK_SIZE);
           console.log(
-            `Cron ${controller.cron} chunk offset=${chunk.offset} limit=${chunk.limit}`,
+            `Cron ${controller.cron} chunk offset=${offset} limit=${CRON_CHUNK_SIZE}`,
             snapshot
               ? `ok symbols=${snapshot.symbolCount} scannedAt=${snapshot.scannedAt}`
               : "skipped (scan in progress)",
