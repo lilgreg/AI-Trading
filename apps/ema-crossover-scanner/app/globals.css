@@ -344,14 +344,14 @@ table.scan-table tbody tr:hover {
   align-items: baseline;
   gap: 0.5rem;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 0.75rem;
-  font-weight: 600;
+  font-size: 1.0625rem;
+  font-weight: 700;
   color: var(--accent);
 }
 
 .news-chip-change {
-  font-size: 0.6875rem;
-  font-weight: 600;
+  font-size: 0.9375rem;
+  font-weight: 700;
   margin-left: 0.125rem;
 }
 

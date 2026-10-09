@@ -296,6 +296,8 @@ const INITIAL_HEAL_DELAY_MS = 60_000;
 const NEWS_FETCH_TIMEOUT_MS = 45_000;
 const NEWS_FETCH_RETRIES = 3;
 const NEWS_FETCH_RETRY_DELAY_MS = 2_000;
+const QUOTE_REFOCUS_THRESHOLD_MS = 60_000;
+const CACHE_REFOCUS_THRESHOLD_MS = 3_600_000;
 
 async function fetchJsonWithRetry<T>(
   url: string,
@@ -568,6 +570,8 @@ export default function HomePage() {
   const chartErrorRetryPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const chartErrorRetryInFlightRef = useRef(false);
   const pageVisibleRef = useRef(true);
+  const lastQuotePollAtRef = useRef<number>(0);
+  const lastCacheScanAtRef = useRef<number>(0);
   const quoteChunkOffsetRef = useRef(0);
   const newsHeadlinesRef = useRef<NewsHeadline[]>([]);
   const seenNewsIdsRef = useRef<Set<string>>(new Set());
@@ -640,6 +644,7 @@ export default function HomePage() {
       noteWorkerSuccess();
       setRateLimitMsg(null);
       setData((prev) => applyScanPayload(json, prev));
+      lastCacheScanAtRef.current = Date.now();
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Failed to load scan";
       if (msg.toLowerCase().includes("failed to fetch") && isWorkerRateLimited()) {
@@ -922,6 +927,7 @@ export default function HomePage() {
         (offset + body.quotes.length) % (body.totalSymbols ?? totalSymbols);
 
       applyQuotePayload(body.quotes);
+      lastQuotePollAtRef.current = Date.now();
     } catch {
       // ignore background quote poll errors
     }
@@ -1009,12 +1015,19 @@ export default function HomePage() {
   }, [fetchCache]);
 
   useEffect(() => {
-    const onVisibility = () => {
-      pageVisibleRef.current = !document.hidden;
+    const onActivity = () => {
+      pageVisibleRef.current =
+        document.visibilityState !== "hidden" && document.hasFocus();
     };
-    onVisibility();
-    document.addEventListener("visibilitychange", onVisibility);
-    return () => document.removeEventListener("visibilitychange", onVisibility);
+    onActivity();
+    document.addEventListener("visibilitychange", onActivity);
+    window.addEventListener("focus", onActivity);
+    window.addEventListener("blur", onActivity);
+    return () => {
+      document.removeEventListener("visibilitychange", onActivity);
+      window.removeEventListener("focus", onActivity);
+      window.removeEventListener("blur", onActivity);
+    };
   }, []);
 
   useEffect(() => {
@@ -1044,7 +1057,7 @@ export default function HomePage() {
   useEffect(() => {
     const coordinator = createPollCoordinator({
       tickMs: COORDINATOR_TICK_MS,
-      isPaused: () => !pageVisibleRef.current || isWorkerRateLimited(),
+      isPaused: () => isWorkerRateLimited(),
     });
 
     coordinator.register({
@@ -1081,8 +1094,31 @@ export default function HomePage() {
       run: () => fetchCache({ quiet: true, heal: true }),
     });
 
+    const onRefocus = () => {
+      const now = Date.now();
+      if (now - lastQuotePollAtRef.current > QUOTE_REFOCUS_THRESHOLD_MS) {
+        void pollQuotes();
+      }
+      if (now - lastCacheScanAtRef.current > CACHE_REFOCUS_THRESHOLD_MS) {
+        void fetchCache({ quiet: true });
+      }
+    };
+
+    const syncLoop = () => {
+      if (pageVisibleRef.current) {
+        onRefocus();
+        coordinator.start();
+      } else {
+        coordinator.stop();
+      }
+    };
+
+    window.addEventListener("focus", syncLoop);
+    window.addEventListener("blur", syncLoop);
+    document.addEventListener("visibilitychange", syncLoop);
+
     const boot = setTimeout(() => {
-      coordinator.start();
+      syncLoop();
       if (data && !data.cacheEmpty) {
         setTimeout(() => void pollQuotes(), INITIAL_QUOTES_DELAY_MS);
         setTimeout(() => void primeAllQuotes(), INITIAL_QUOTES_DELAY_MS);
@@ -1101,6 +1137,9 @@ export default function HomePage() {
 
     return () => {
       clearTimeout(boot);
+      window.removeEventListener("focus", syncLoop);
+      window.removeEventListener("blur", syncLoop);
+      document.removeEventListener("visibilitychange", syncLoop);
       coordinator.stop();
     };
   }, [
