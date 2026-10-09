@@ -1,0 +1,169 @@
+{
+  "total_count": 1,
+  "jobs": [
+    {
+      "id": 82067248538,
+      "run_id": 27740768791,
+      "workflow_name": "Deploy to Cloudflare Workers",
+      "head_branch": "main",
+      "run_url": "https://api.github.com/repos/lilgreg/AI-Trading/actions/runs/27740768791",
+      "run_attempt": 1,
+      "node_id": "CR_kwDOS7CaSs8AAAATG5bVmg",
+      "head_sha": "924842029c822039d46932bf6b58f862f1523ba2",
+      "url": "https://api.github.com/repos/lilgreg/AI-Trading/actions/jobs/82067248538",
+      "html_url": "https://github.com/lilgreg/AI-Trading/actions/runs/27740768791/job/82067248538",
+      "status": "completed",
+      "conclusion": "failure",
+      "created_at": "2026-06-18T06:19:24Z",
+      "started_at": "2026-06-18T06:19:26Z",
+      "completed_at": "2026-06-18T06:20:10Z",
+      "name": "deploy",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-06-18T06:19:26Z",
+          "completed_at": "2026-06-18T06:19:27Z"
+        },
+        {
+          "name": "Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-06-18T06:19:27Z",
+          "completed_at": "2026-06-18T06:19:28Z"
+        },
+        {
+          "name": "Validate required secrets",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-06-18T06:19:28Z",
+          "completed_at": "2026-06-18T06:19:28Z"
+        },
+        {
+          "name": "Setup Node.js",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-06-18T06:19:28Z",
+          "completed_at": "2026-06-18T06:19:30Z"
+        },
+        {
+          "name": "Install dependencies",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-06-18T06:19:30Z",
+          "completed_at": "2026-06-18T06:19:45Z"
+        },
+        {
+          "name": "Ensure R2 buckets exist",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-06-18T06:19:45Z",
+          "completed_at": "2026-06-18T06:19:49Z"
+        },
+        {
+          "name": "Verify Cloudflare credentials",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 7,
+          "started_at": "2026-06-18T06:19:49Z",
+          "completed_at": "2026-06-18T06:19:51Z"
+        },
+        {
+          "name": "Inject Worker public vars into wrangler.toml",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 8,
+          "started_at": "2026-06-18T06:19:51Z",
+          "completed_at": "2026-06-18T06:19:51Z"
+        },
+        {
+          "name": "Sync Worker secrets",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 9,
+          "started_at": "2026-06-18T06:19:51Z",
+          "completed_at": "2026-06-18T06:19:53Z"
+        },
+        {
+          "name": "Build Next.js app (Webpack)",
+          "status": "completed",
+          "conclusion": "failure",
+          "number": 10,
+          "started_at": "2026-06-18T06:19:53Z",
+          "completed_at": "2026-06-18T06:20:08Z"
+        },
+        {
+          "name": "Bundle OpenNext worker",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 11,
+          "started_at": "2026-06-18T06:20:08Z",
+          "completed_at": "2026-06-18T06:20:08Z"
+        },
+        {
+          "name": "Deploy to Cloudflare Workers",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 12,
+          "started_at": "2026-06-18T06:20:08Z",
+          "completed_at": "2026-06-18T06:20:08Z"
+        },
+        {
+          "name": "Smoke test workers.dev",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 13,
+          "started_at": "2026-06-18T06:20:08Z",
+          "completed_at": "2026-06-18T06:20:08Z"
+        },
+        {
+          "name": "Smoke test summary",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 14,
+          "started_at": "2026-06-18T06:20:08Z",
+          "completed_at": "2026-06-18T06:20:08Z"
+        },
+        {
+          "name": "Post Setup Node.js",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 27,
+          "started_at": "2026-06-18T06:20:08Z",
+          "completed_at": "2026-06-18T06:20:08Z"
+        },
+        {
+          "name": "Post Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 28,
+          "started_at": "2026-06-18T06:20:08Z",
+          "completed_at": "2026-06-18T06:20:09Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 29,
+          "started_at": "2026-06-18T06:20:09Z",
+          "completed_at": "2026-06-18T06:20:09Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/lilgreg/AI-Trading/check-runs/82067248538",
+      "labels": [
+        "ubuntu-latest"
+      ],
+      "runner_id": 1000000055,
+      "runner_name": "GitHub Actions 1000000055",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    }
+  ]
+}
